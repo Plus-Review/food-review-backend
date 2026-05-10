@@ -5,26 +5,25 @@ const sequelize = require('./config/db');
 const User = require('./models/User');
 const Umkm = require('./models/Umkm');
 const Review = require('./models/Review');
+const path = require('path');
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use('/api/auth', express.json(), require('./routes/authRoutes'));
+app.use('/api/umkm', require('./routes/umkmRoutes'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// User - Umkm (One-to-Many)
+// Relasi model
 User.hasMany(Umkm, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Umkm.belongsTo(User, { foreignKey: 'userId' });
-// Umkm - Review (One-to-Many)
 Umkm.hasMany(Review, { foreignKey: 'umkmId', onDelete: 'CASCADE' });
 Review.belongsTo(Umkm, { foreignKey: 'umkmId' });
-// User - Review (One-to-Many)
 User.hasMany(Review, { foreignKey: 'userId', onDelete: 'CASCADE' });
 Review.belongsTo(User, { foreignKey: 'userId' });
 
 app.get('/', (req, res) => {
     res.send('API Food Review Kampus Berjalan Lancar!');
 });
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/umkm', require('./routes/umkmRoutes'));
 
 const PORT = process.env.PORT || 5000;
 sequelize.sync({ alter: true })
@@ -37,4 +36,3 @@ sequelize.sync({ alter: true })
     .catch((err) => {
         console.error('Gagal sinkronisasi database:', err);
     });
-    

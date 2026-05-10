@@ -10,7 +10,8 @@ const Umkm = sequelize.define('Umkm', {
   latitude: { type: DataTypes.DOUBLE }, 
   longitude: { type: DataTypes.DOUBLE }, 
   avg_rating: { type: DataTypes.FLOAT, defaultValue: 0 },
-  last_reviewed_at: { type: DataTypes.DATE }
+  image: { type: DataTypes.STRING }, // Menyimpan nama file (contoh: 171534.jpg)
+  userId: { type: DataTypes.INTEGER } // Penting untuk relasi pemilik UMKM
 });
 
 module.exports = Umkm;
