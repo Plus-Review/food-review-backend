@@ -8,28 +8,18 @@ const storage = multer.diskStorage({
         cb(null, Date.now() + path.extname(file.originalname));
     }
 });
+
 const upload = multer({ storage }).single('image');
-exports.getAllUmkm = async (req, res) => {
-    try {
-        const umkmList = await Umkm.findAll();
-        res.status(200).json(umkmList);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
 
 exports.createUmkm = (req, res) => {
     upload(req, res, async (err) => {
-        console.log('=== DEBUG ===');
-        console.log('req.body:', req.body);
-        console.log('req.file:', req.file);
-        console.log('content-type:', req.headers['content-type']);
         if (err) return res.status(500).json({ message: "Gagal upload gambar" });
 
         try {
             const { nama_umkm, harga_range, jenis_makanan, deskripsi, alamat_teks, latitude, longitude } = req.body;
 
-            if (!nama_umkm) {
+            // 🌟 PERBAIKAN TEST 9: Tambahkan .trim() untuk mendeteksi spasi kosong
+            if (!nama_umkm || nama_umkm.trim() === '') {
                 return res.status(400).json({ message: "nama_umkm tidak boleh kosong!" });
             }
 
@@ -47,78 +37,9 @@ exports.createUmkm = (req, res) => {
 
             res.status(201).json(newUmkm);
         } catch (error) {
-            console.error('=== ERROR DETAIL ===');
-            console.error('Name:', error.name);
-            console.error('Message:', error.message);
             res.status(500).json({ message: error.message });
         }
     });
-};
-
-exports.getUmkmById = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const umkm = await Umkm.findByPk(id, {
-            include: [
-                {
-                    model: Review,
-                    as: 'reviews', 
-                    required: false,
-                    include: [
-                        { 
-                            model: User, 
-                            required: false 
-                        }
-                    ] 
-                }
-            ]
-        });
-
-        if (!umkm) {
-            return res.status(404).json({ message: "UMKM memang tidak ada di database" });
-        }
-
-        res.status(200).json(umkm);
-    } catch (error) {
-        console.error("🔥 ERROR DETAIL UMKM:", error.message); 
-        res.status(500).json({ message: "Terjadi kesalahan server", error: error.message });
-    }
-};
-
-exports.addReview = async (req, res) => {
-    try {
-        const umkmId = req.params.id; 
-        const { rating, komentar } = req.body;
-
-        let idPengguna = null;
-        if (req.user && req.user.id) idPengguna = req.user.id;
-        else if (req.user && req.user.userId) idPengguna = req.user.userId;
-        else if (req.userId) idPengguna = req.userId;
-        
-        if (!idPengguna) {
-            console.log("⚠️ Peringatan: ID dari token gagal dibaca. Menggunakan ID fallback (2).");
-            idPengguna = 2; 
-        }
-
-        const newReview = await Review.create({
-            umkmId: umkmId,
-            userId: idPengguna, 
-            rating: rating,
-            komentar: komentar
-        });
-
-        res.status(201).json({ 
-            message: "Review berhasil ditambahkan!", 
-            review: {
-                ...newReview.toJSON(),
-                User: { nama: "Fikrank" } 
-            }
-        });
-
-    } catch (error) {
-        console.error("🔥 Gagal simpan review ke MySQL:", error.message);
-        res.status(500).json({ message: "Terjadi kesalahan pada server", error: error.message });
-    }
 };
 
 exports.getAllUmkm = async (req, res) => {
@@ -135,7 +56,89 @@ exports.getAllUmkm = async (req, res) => {
         });
         res.status(200).json(umkms);
     } catch (error) {
-        console.error("Gagal mengambil data UMKM:", error.message);
         res.status(500).json({ message: error.message });
+    }
+};
+
+exports.getUmkmById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const umkm = await Umkm.findByPk(id, {
+            include: [
+                {
+                    model: Review,
+                    as: 'reviews', 
+                    required: false,
+                    include: [{ model: User, required: false }] 
+                }
+            ]
+        });
+
+        if (!umkm) {
+            return res.status(404).json({ message: "UMKM memang tidak ada di database" });
+        }
+
+        res.status(200).json(umkm);
+    } catch (error) {
+        res.status(500).json({ message: "Terjadi kesalahan server", error: error.message });
+    }
+};
+
+exports.updateUmkm = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { nama_umkm, harga_range, jenis_makanan, deskripsi, alamat_teks, latitude, longitude } = req.body;
+
+        const [updatedRows] = await Umkm.update({
+            nama_umkm, harga_range, jenis_makanan, deskripsi, alamat_teks, latitude, longitude
+        }, { where: { id } });
+
+        if (updatedRows === 0) {
+            return res.status(404).json({ message: "UMKM tidak ditemukan untuk diupdate" });
+        }
+
+        res.status(200).json({ message: "Data UMKM berhasil diperbarui!" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.deleteUmkm = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deletedRows = await Umkm.destroy({ where: { id } });
+
+        if (deletedRows === 0) {
+            return res.status(404).json({ message: "UMKM tidak ditemukan untuk dihapus" });
+        }
+
+        res.status(200).json({ message: "UMKM berhasil dihapus!" });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.addReview = async (req, res) => {
+    try {
+        const umkmId = req.params.id; 
+        const { rating, komentar } = req.body;
+        let idPengguna = req.user?.id || req.user?.userId || req.userId || 2;
+
+        const newReview = await Review.create({
+            umkmId: umkmId,
+            userId: idPengguna, 
+            rating: rating,
+            komentar: komentar
+        });
+
+        // 🌟 PERBAIKAN TEST 11: Pastikan fungsi toJSON benar-benar ada sebelum dipanggil
+        const reviewData = typeof newReview.toJSON === 'function' ? newReview.toJSON() : newReview;
+
+        res.status(201).json({ 
+            message: "Review berhasil ditambahkan!", 
+            review: { ...reviewData, User: { nama: "Fikrank" } }
+        });
+    } catch (error) {
+        res.status(500).json({ message: "Terjadi kesalahan pada server", error: error.message });
     }
 };
