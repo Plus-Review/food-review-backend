@@ -4,6 +4,7 @@ const sequelize = require('../config/db');
 const Review = sequelize.define('Review', {
   rating: { type: DataTypes.INTEGER, allowNull: false },
   komentar: { type: DataTypes.TEXT, allowNull: false },
+  images: { type: DataTypes.JSON },
 }, { timestamps: true });
 
 module.exports = Review;

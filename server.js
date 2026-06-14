@@ -27,7 +27,7 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-sequelize.sync()
+sequelize.sync({ alter: true })
     .then(() => {
         console.log('--- Database & Tabel Berhasil Disinkronkan ---');
         app.listen(PORT, () => {

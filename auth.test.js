@@ -38,12 +38,12 @@ describe('Unit Test: Fitur Registrasi (Register)', () => {
             .send({
                 username: 'Fikrank Tester',
                 email: 'fikrank@test.com',
-                password: 'password123'
+                password: 'Password123!'
             });
 
         expect(res.statusCode).toBe(201);
         expect(bcrypt.genSalt).toHaveBeenCalledWith(10);
-        expect(bcrypt.hash).toHaveBeenCalledWith('password123', 'salt');
+        expect(bcrypt.hash).toHaveBeenCalledWith('Password123!', 'salt');
         expect(User.create).toHaveBeenCalledTimes(1);
     });
 
@@ -54,10 +54,23 @@ describe('Unit Test: Fitur Registrasi (Register)', () => {
             .send({
                 username: 'Fikrank Tester',
                 email: 'fikrank@test.com',
-                password: 'password123'
+                password: 'Password123!'
             });
 
         expect(res.statusCode).toBe(500);
         expect(User.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('Harus menolak password tanpa kombinasi huruf besar, kecil, angka, dan karakter unik', async () => {
+        const res = await request(app)
+            .post('/api/auth/register')
+            .send({
+                username: 'Fikrank Tester',
+                email: 'fikrank@test.com',
+                password: 'password123'
+            });
+
+        expect(res.statusCode).toBe(400);
+        expect(User.create).not.toHaveBeenCalled();
     });
 });

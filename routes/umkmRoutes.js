@@ -4,8 +4,13 @@ const umkmController = require('../controllers/UmkmController');
 const auth = require('../middleware/authMiddleware'); 
 
 router.get('/', umkmController.getAllUmkm);
+router.get('/saved', auth, umkmController.getSavedUmkm);
 router.post('/', auth, umkmController.createUmkm);
 router.get('/:id', umkmController.getUmkmById);
+router.put('/:id', auth, umkmController.updateUmkm);
+router.delete('/:id', auth, umkmController.deleteUmkm);
+router.post('/:id/save', auth, umkmController.saveUmkm);
+router.delete('/:id/save', auth, umkmController.unsaveUmkm);
 router.post('/:id/reviews', auth, umkmController.addReview);
 
 module.exports = router;
