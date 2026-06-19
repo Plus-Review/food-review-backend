@@ -1,8 +1,9 @@
-const sequelize = require('../config/db'); 
+const sequelize = require('../config/db');
 const User = require('./User');
 const Umkm = require('./Umkm');
-const Review = require('./Review'); 
+const Review = require('./Review');
 const SavedUmkm = require('./SavedUmkm');
+const Notification = require('./Notification');
 
 User.hasMany(Umkm, { foreignKey: 'userId', as: 'umkms' });
 Umkm.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
@@ -14,11 +15,15 @@ User.belongsToMany(Umkm, { through: SavedUmkm, as: 'savedUmkms', foreignKey: 'us
 Umkm.belongsToMany(User, { through: SavedUmkm, as: 'savedByUsers', foreignKey: 'umkmId', otherKey: 'userId' });
 SavedUmkm.belongsTo(User, { foreignKey: 'userId' });
 SavedUmkm.belongsTo(Umkm, { foreignKey: 'umkmId' });
+User.hasMany(Notification, { foreignKey: 'userId', as: 'notifications' });
+Notification.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+Notification.belongsTo(Umkm, { foreignKey: 'relatedUmkmId', as: 'umkm' });
 
 module.exports = {
     sequelize,
     User,
     Umkm,
     Review,
-    SavedUmkm 
+    SavedUmkm,
+    Notification
 };

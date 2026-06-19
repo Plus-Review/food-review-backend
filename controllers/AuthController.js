@@ -5,6 +5,14 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { Op } = require('sequelize');
+const {
+    cleanEmail,
+    cleanText,
+    createUploadFilename,
+    getSafeErrorMessage,
+    imageFileFilter,
+    isValidEmail,
+} = require('../utils/security');
 
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -12,20 +20,14 @@ fs.mkdirSync(uploadsDir, { recursive: true });
 const profileStorage = multer.diskStorage({
     destination: uploadsDir,
     filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname || '').toLowerCase();
-        cb(null, `profile-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+        cb(null, createUploadFilename('profile', file));
     },
 });
 
 const profileUpload = multer({
     storage: profileStorage,
-    limits: { fileSize: 2 * 1024 * 1024 },
-    fileFilter: (req, file, cb) => {
-        if (!file.mimetype.startsWith('image/')) {
-            return cb(new Error('File profil harus berupa gambar.'));
-        }
-        cb(null, true);
-    },
+    limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 8 },
+    fileFilter: imageFileFilter('Foto profil'),
 }).single('profileImage');
 
 const serializeUser = (user) => ({
@@ -38,7 +40,9 @@ const serializeUser = (user) => ({
 const passwordRuleMessage = "Password wajib memiliki huruf besar, huruf kecil, angka, dan karakter unik.";
 
 const isStrongPassword = (password) => (
-    /[A-Z]/.test(password)
+    password.length >= 8
+    && password.length <= 72
+    && /[A-Z]/.test(password)
     && /[a-z]/.test(password)
     && /\d/.test(password)
     && /[^A-Za-z0-9]/.test(password)
@@ -60,12 +64,16 @@ exports.uploadProfileImage = (req, res, next) => {
 
 exports.register = async (req, res) => {
     try {
-        const username = String(req.body.username || '').trim();
-        const email = String(req.body.email || '').trim().toLowerCase();
+        const username = cleanText(req.body.username, 60);
+        const email = cleanEmail(req.body.email);
         const password = String(req.body.password || '');
 
         if (!username || !email || !password) {
             return res.status(400).json({ message: "Username, email, dan password wajib diisi." });
+        }
+
+        if (!isValidEmail(email)) {
+            return res.status(400).json({ message: "Format email tidak valid." });
         }
 
         if (!isStrongPassword(password)) {
@@ -98,25 +106,31 @@ exports.register = async (req, res) => {
             return res.status(409).json({ message: "Username atau email sudah digunakan." });
         }
 
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: getSafeErrorMessage(err) });
     }
 };
 
 exports.login = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const email = cleanEmail(req.body.email);
+        const password = String(req.body.password || '');
+
+        if (!email || !password || !isValidEmail(email)) {
+            return res.status(401).json({ message: "Email atau password salah." });
+        }
+
         const user = await User.findOne({ where: { email } });
 
-        if (!user) return res.status(404).json({ message: "User tidak ditemukan" });
+        if (!user) return res.status(401).json({ message: "Email atau password salah." });
 
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ message: "Password salah" });
+        if (!isMatch) return res.status(401).json({ message: "Email atau password salah." });
 
         const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1d' });
 
         res.json({ message: "Login Berhasil", token, user: serializeUser(user) });
     } catch (err) {
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: getSafeErrorMessage(err) });
     }
 };
 
@@ -129,7 +143,7 @@ exports.getProfile = async (req, res) => {
 
         res.json({ user: serializeUser(user) });
     } catch (err) {
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: getSafeErrorMessage(err) });
     }
 };
 
@@ -138,7 +152,7 @@ exports.getStats = async (req, res) => {
         const totalUsers = await User.count();
         res.json({ totalUsers });
     } catch (err) {
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: getSafeErrorMessage(err) });
     }
 };
 
@@ -149,12 +163,25 @@ exports.updateProfile = async (req, res) => {
             return res.status(404).json({ message: "User tidak ditemukan" });
         }
 
-        const username = String(req.body.username || '').trim();
-        const email = String(req.body.email || '').trim().toLowerCase();
+        const username = cleanText(req.body.username, 60);
+        const email = cleanEmail(req.body.email);
         const password = String(req.body.password || '');
 
         if (!username || !email) {
             return res.status(400).json({ message: "Nama dan email wajib diisi." });
+        }
+
+        if (!isValidEmail(email)) {
+            return res.status(400).json({ message: "Format email tidak valid." });
+        }
+
+        const hasChanges = username !== user.username
+            || email !== user.email
+            || Boolean(password.trim())
+            || Boolean(req.file);
+
+        if (!hasChanges) {
+            return res.status(400).json({ message: "Isi perubahan terlebih dahulu sebelum menyimpan." });
         }
 
         const usernameExists = await User.findOne({
@@ -201,6 +228,6 @@ exports.updateProfile = async (req, res) => {
             return res.status(409).json({ message: "Nama atau email sudah digunakan." });
         }
 
-        res.status(500).json({ message: err.message });
+        res.status(500).json({ message: getSafeErrorMessage(err) });
     }
 };
