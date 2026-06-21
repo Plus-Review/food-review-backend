@@ -31,7 +31,7 @@ const normalizeCategoryKey = (value) => cleanText(value, 80)
 const CATEGORY_ALIASES = [
     {
         canonical: 'Makanan berat',
-        aliases: ['makanan berat', 'makanan utama', 'menu utama', 'nasi', 'ayam', 'bakso', 'mie'],
+        aliases: ['makanan berat', 'makanan utama', 'menu utama', 'heavy meal'],
     },
     {
         canonical: 'Snacks & Dessert',
@@ -48,14 +48,17 @@ const CATEGORY_ALIASES = [
             'snack',
             'cemilan',
             'camilan',
-            'jajanan',
-            'kue',
-            'roti',
         ],
     },
     {
         canonical: 'Drinks',
-        aliases: ['drinks', 'drink', 'minuman', 'kopi', 'coffee', 'teh', 'jus', 'juice', 'boba'],
+        aliases: [
+            'drinks',
+            'drink',
+            'minuman',
+            'beverage',
+            'beverages',
+        ],
     },
 ];
 

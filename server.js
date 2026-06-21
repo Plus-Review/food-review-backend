@@ -3,20 +3,30 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const sequelize = require('./config/db');
-const User = require('./models/User');
-const Umkm = require('./models/Umkm');
-const Review = require('./models/Review'); 
-const Notification = require('./models/Notification');
+const { sequelize } = require('./models');
+const { ensureDefaultAdmins } = require('./utils/adminSeed');
+const { isMailerConfigured, verifyMailerConnection } = require('./utils/mailer');
 const path = require('path');
 const app = express();
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
 const allowedOrigins = (process.env.CLIENT_URL || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
 
-if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
-    console.warn('Peringatan: JWT_SECRET belum kuat. Gunakan secret panjang dan acak sebelum deploy.');
+const hasWeakJwtSecret = !process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16;
+if (hasWeakJwtSecret) {
+    const message = 'JWT_SECRET wajib berupa secret panjang dan acak minimal 16 karakter.';
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error(message);
+    }
+    console.warn(`Peringatan: ${message}`);
+}
+
+if (process.env.NODE_ENV === 'production' && !isMailerConfigured()) {
+    throw new Error('Konfigurasi SMTP wajib diisi agar verifikasi email dan reset password dapat digunakan.');
 }
 
 const apiLimiter = rateLimit({
@@ -33,6 +43,14 @@ const authLimiter = rateLimit({
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { message: 'Percobaan login/registrasi terlalu sering. Coba lagi nanti.' },
+});
+
+const credentialRecoveryLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { message: 'Permintaan keamanan akun terlalu sering. Coba lagi dalam 15 menit.' },
 });
 
 app.use(cors({
@@ -52,6 +70,12 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use('/api', apiLimiter);
 app.use(['/api/auth/login', '/api/auth/register', '/api/admin/login'], authLimiter);
+app.use([
+    '/api/auth/verify-email',
+    '/api/auth/resend-verification',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password',
+], credentialRecoveryLimiter);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/umkm', require('./routes/umkmRoutes'));
@@ -66,16 +90,14 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
     },
 }));
 
-// Relasi model
-User.hasMany(Umkm, { foreignKey: 'userId', onDelete: 'CASCADE' });
-Umkm.belongsTo(User, { foreignKey: 'userId' });
-Umkm.hasMany(Review, { foreignKey: 'umkmId', onDelete: 'CASCADE' });
-Review.belongsTo(Umkm, { foreignKey: 'umkmId' });
-User.hasMany(Review, { foreignKey: 'userId', onDelete: 'CASCADE' });
-Review.belongsTo(User, { foreignKey: 'userId' });
-User.hasMany(Notification, { foreignKey: 'userId', onDelete: 'CASCADE' });
-Notification.belongsTo(User, { foreignKey: 'userId' });
-Notification.belongsTo(Umkm, { foreignKey: 'relatedUmkmId' });
+app.get('/api/health', async (req, res) => {
+    try {
+        await sequelize.authenticate();
+        res.status(200).json({ status: 'ok', service: 'plus-review-api' });
+    } catch {
+        res.status(503).json({ status: 'unavailable', service: 'plus-review-api' });
+    }
+});
 
 app.get('/', (req, res) => {
     res.send('API Food Review Kampus Berjalan Lancar!');
@@ -103,13 +125,59 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-sequelize.sync({ alter: true })
-    .then(() => {
+const shouldAlterSchema = process.env.DB_SYNC_ALTER === 'true'
+    || (process.env.NODE_ENV !== 'production' && process.env.DB_SYNC_ALTER !== 'false');
+const syncOptions = shouldAlterSchema ? { alter: true } : {};
+const smtpVerifySetting = String(process.env.SMTP_VERIFY_ON_START || '').toLowerCase();
+const shouldVerifySmtpOnStart = smtpVerifySetting === 'true'
+    || (process.env.NODE_ENV === 'production' && smtpVerifySetting !== 'false');
+
+let httpServer;
+
+sequelize.sync(syncOptions)
+    .then(async () => {
+        if (shouldVerifySmtpOnStart) {
+            await verifyMailerConnection();
+            console.log('--- Koneksi SMTP Berhasil Diverifikasi ---');
+        }
+        await ensureDefaultAdmins();
         console.log('--- Database & Tabel Berhasil Disinkronkan ---');
-        app.listen(PORT, () => {
+        httpServer = app.listen(PORT, () => {
             console.log(`Server aktif di: http://localhost:${PORT}`);
         });
     })
-    .catch((err) => {
-        console.error('Gagal sinkronisasi database:', err);
+    .catch(async (err) => {
+        console.error('Gagal memulai server:', err);
+        try {
+            await sequelize.close();
+        } finally {
+            process.exit(1);
+        }
     });
+
+const shutdown = (signal) => {
+    console.log(`${signal} diterima. Menutup server dengan aman...`);
+
+    const forceExitTimer = setTimeout(() => process.exit(1), 10000);
+    forceExitTimer.unref();
+
+    const closeDatabase = async () => {
+        try {
+            await sequelize.close();
+            process.exit(0);
+        } catch (error) {
+            console.error('Gagal menutup koneksi database:', error.message);
+            process.exit(1);
+        }
+    };
+
+    if (httpServer) {
+        httpServer.close(closeDatabase);
+        return;
+    }
+
+    void closeDatabase();
+};
+
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));

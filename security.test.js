@@ -23,9 +23,11 @@ describe('Unit Test: Utilitas Security dan Sanitasi', () => {
     });
 
     it('Harus menormalisasi kategori makanan dari alias user', () => {
-        expect(normalizeCategory('nasi')).toBe('Makanan berat');
+        expect(normalizeCategory('menu utama')).toBe('Makanan berat');
         expect(normalizeCategory('dessert')).toBe('Snacks & Dessert');
-        expect(normalizeCategory('kopi')).toBe('Drinks');
+        expect(normalizeCategory('minuman')).toBe('Drinks');
+        expect(normalizeCategory('kopi')).toBe('');
+        expect(normalizeCategory('coffe')).toBe('');
         expect(normalizeCategory('kategori tidak ada')).toBe('');
     });
 

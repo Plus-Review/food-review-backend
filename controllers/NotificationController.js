@@ -15,10 +15,20 @@ const notificationInclude = [
 
 const serializeNotification = (notification) => {
     const row = notification.toJSON();
+    let metadata = row.metadata || {};
+
+    if (typeof metadata === 'string') {
+        try {
+            metadata = JSON.parse(metadata);
+        } catch {
+            metadata = {};
+        }
+    }
+
     return {
         ...row,
         isRead: Boolean(row.isRead),
-        metadata: row.metadata || {},
+        metadata,
         umkm: row.umkm || null,
     };
 };
@@ -98,6 +108,27 @@ exports.markAllMyNotificationsRead = async (req, res) => {
     }
 };
 
+exports.deleteMyNotification = async (req, res) => {
+    try {
+        const userId = getAuthUserId(req);
+        const id = parsePositiveInt(req.params.id);
+        if (!userId) return res.status(401).json({ message: 'Silakan login untuk menghapus notifikasi.' });
+        if (!id) return res.status(400).json({ message: 'ID notifikasi tidak valid.' });
+
+        const deleted = await Notification.destroy({
+            where: { id, recipientType: 'user', userId },
+        });
+
+        if (!deleted) {
+            return res.status(404).json({ message: 'Notifikasi tidak ditemukan.' });
+        }
+
+        res.json({ message: 'Notifikasi berhasil dihapus.' });
+    } catch (error) {
+        res.status(500).json({ message: getSafeErrorMessage(error) });
+    }
+};
+
 exports.getAdminNotifications = async (req, res) => {
     try {
         const where = { recipientType: 'admin' };
@@ -115,6 +146,25 @@ exports.getAdminNotifications = async (req, res) => {
             ...summary,
             notifications: notifications.map(serializeNotification),
         });
+    } catch (error) {
+        res.status(500).json({ message: getSafeErrorMessage(error) });
+    }
+};
+
+exports.deleteAdminNotification = async (req, res) => {
+    try {
+        const id = parsePositiveInt(req.params.id);
+        if (!id) return res.status(400).json({ message: 'ID notifikasi tidak valid.' });
+
+        const deleted = await Notification.destroy({
+            where: { id, recipientType: 'admin' },
+        });
+
+        if (!deleted) {
+            return res.status(404).json({ message: 'Notifikasi tidak ditemukan.' });
+        }
+
+        res.json({ message: 'Notifikasi admin berhasil dihapus.' });
     } catch (error) {
         res.status(500).json({ message: getSafeErrorMessage(error) });
     }

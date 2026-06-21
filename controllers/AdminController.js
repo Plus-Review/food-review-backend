@@ -3,31 +3,39 @@ const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
 const { Umkm, Review, User } = require('../models');
 const {
     cleanText,
+    createUploadFilename,
     getSafeErrorMessage,
+    imageFileFilter,
     normalizeImageList,
     parsePositiveInt,
     resolveUploadPath,
 } = require('../utils/security');
+const { ensureDefaultAdmins } = require('../utils/adminSeed');
+const { isDefaultAdminUsername, normalizeAdminUsername } = require('../utils/adminCredentials');
 const { createUserNotification } = require('../utils/notifications');
 
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 const DUMMY_ADMIN_HASH = '$2b$12$hhl.ppqnR5TahN/zWQMFneDnDf6HdBoyQEaGjrqbYG6KzCnhcg6py';
+const passwordRuleMessage = 'Password wajib memiliki huruf besar, huruf kecil, angka, dan karakter unik.';
 
-const ADMIN_USERS = [
-    {
-        username: 'adminplus',
-        passwordHash: '$2b$12$hhl.ppqnR5TahN/zWQMFneDnDf6HdBoyQEaGjrqbYG6KzCnhcg6py',
-        name: 'Admin Plus Review',
+fs.mkdirSync(uploadsDir, { recursive: true });
+
+const adminProfileStorage = multer.diskStorage({
+    destination: uploadsDir,
+    filename: (req, file, cb) => {
+        cb(null, createUploadFilename('admin-profile', file));
     },
-    {
-        username: 'reviewmaster',
-        passwordHash: '$2b$12$tw5ajyDE6PInAWK.BMkTm.OBDQPNQq0lDDbSV4QjUYv01diuqi7pO',
-        name: 'Review Master',
-    },
-];
+});
+
+const adminProfileUpload = multer({
+    storage: adminProfileStorage,
+    limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 6 },
+    fileFilter: imageFileFilter('Foto profil admin'),
+}).single('profileImage');
 
 const reviewInclude = {
     model: Review,
@@ -82,44 +90,150 @@ const sanitizeUmkm = (umkm) => {
     };
 };
 
-const findAdmin = (username) => (
-    ADMIN_USERS.find((admin) => admin.username.toLowerCase() === String(username || '').trim().toLowerCase())
+const serializeAdmin = (admin) => ({
+    id: admin.id,
+    username: admin.username,
+    name: admin.name || admin.username,
+    email: admin.email,
+    profileImage: admin.profileImage || null,
+    role: 'admin',
+});
+
+const isStrongPassword = (password) => (
+    password.length >= 8
+    && password.length <= 72
+    && /[A-Z]/.test(password)
+    && /[a-z]/.test(password)
+    && /\d/.test(password)
+    && /[^A-Za-z0-9]/.test(password)
 );
 
-exports.login = async (req, res) => {
-    const username = cleanText(req.body.username, 60);
-    const password = String(req.body.password || '');
-    const admin = findAdmin(username);
-    const hashToCompare = admin?.passwordHash || DUMMY_ADMIN_HASH;
-    const isPasswordValid = await bcrypt.compare(password, hashToCompare);
+exports.uploadProfileImage = (req, res, next) => {
+    adminProfileUpload(req, res, (err) => {
+        if (!err) {
+            next();
+            return;
+        }
 
-    if (!admin || !isPasswordValid) {
-        return res.status(401).json({ message: 'Username atau password admin salah.' });
-    }
-
-    const token = jwt.sign(
-        { role: 'admin', username: admin.username, name: admin.name },
-        process.env.JWT_SECRET,
-        { expiresIn: '1d' }
-    );
-
-    res.json({
-        message: 'Login admin berhasil.',
-        token,
-        admin: {
-            username: admin.username,
-            name: admin.name,
-        },
+        const message = err.code === 'LIMIT_FILE_SIZE'
+            ? 'Ukuran foto profil admin maksimal 2MB.'
+            : err.message || 'Gagal upload foto profil admin.';
+        res.status(400).json({ message });
     });
+};
+
+exports.login = async (req, res) => {
+    try {
+        const username = normalizeAdminUsername(cleanText(req.body.username, 60));
+        const password = String(req.body.password || '');
+
+        if (!isDefaultAdminUsername(username)) {
+            return res.status(401).json({ message: 'Username atau password admin salah.' });
+        }
+
+        await ensureDefaultAdmins();
+        const admin = await User.findOne({ where: { username, role: 'admin' } });
+        const hashToCompare = admin?.password || DUMMY_ADMIN_HASH;
+        const isPasswordValid = await bcrypt.compare(password, hashToCompare);
+
+        if (!admin || !isPasswordValid) {
+            return res.status(401).json({ message: 'Username atau password admin salah.' });
+        }
+
+        const token = jwt.sign(
+            {
+                id: admin.id,
+                userId: admin.id,
+                role: 'admin',
+                username: admin.username,
+                name: admin.name || admin.username,
+                tokenVersion: Number(admin.tokenVersion || 0),
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '1d' }
+        );
+
+        res.json({
+            message: 'Login admin berhasil.',
+            token,
+            admin: serializeAdmin(admin),
+        });
+    } catch (error) {
+        res.status(500).json({ message: getSafeErrorMessage(error) });
+    }
 };
 
 exports.me = (req, res) => {
     res.json({
-        admin: {
+        admin: serializeAdmin({
+            id: req.admin.adminId || req.admin.id,
             username: req.admin.username,
             name: req.admin.name,
-        },
+            email: req.admin.email,
+            profileImage: req.admin.profileImage,
+        }),
     });
+};
+
+exports.updateProfile = async (req, res) => {
+    try {
+        const admin = await User.findOne({
+            where: {
+                id: req.admin.userId || req.admin.adminId || req.admin.id,
+                role: 'admin',
+            },
+        });
+
+        if (!admin) {
+            return res.status(404).json({ message: 'Akun admin tidak ditemukan.' });
+        }
+
+        const name = cleanText(req.body.name, 60);
+        const password = String(req.body.password || '');
+
+        if (name.length < 2) {
+            if (req.file) deleteUploadedImage(req.file.filename);
+            return res.status(400).json({ message: 'Nama admin wajib minimal 2 karakter.' });
+        }
+
+        const hasChanges = name !== (admin.name || admin.username)
+            || Boolean(password.trim())
+            || Boolean(req.file);
+
+        if (!hasChanges) {
+            return res.status(400).json({ message: 'Isi perubahan terlebih dahulu sebelum menyimpan.' });
+        }
+
+        admin.name = name;
+
+        if (password.trim()) {
+            if (!isStrongPassword(password)) {
+                if (req.file) deleteUploadedImage(req.file.filename);
+                return res.status(400).json({ message: passwordRuleMessage });
+            }
+
+            const salt = await bcrypt.genSalt(12);
+            admin.password = await bcrypt.hash(password, salt);
+            admin.tokenVersion = Number(admin.tokenVersion || 0) + 1;
+        }
+
+        if (req.file) {
+            const previousImage = admin.profileImage;
+            admin.profileImage = req.file.filename;
+            if (previousImage) deleteUploadedImage(previousImage);
+        }
+
+        await admin.save();
+
+        res.json({
+            message: 'Profile admin berhasil diperbarui.',
+            admin: serializeAdmin(admin),
+            sessionInvalidated: Boolean(password.trim()),
+        });
+    } catch (error) {
+        if (req.file) deleteUploadedImage(req.file.filename);
+        res.status(500).json({ message: getSafeErrorMessage(error) });
+    }
 };
 
 exports.getUmkmQueue = async (req, res) => {

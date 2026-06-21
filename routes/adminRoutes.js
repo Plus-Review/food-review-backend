@@ -19,10 +19,13 @@ const adminLoginValidation = [
 
 router.post('/login', adminLoginValidation, validateRequest, adminController.login);
 router.get('/me', adminAuth, adminController.me);
+router.put('/profile', adminAuth, adminController.uploadProfileImage, adminController.updateProfile);
 router.get('/stats', adminController.getPublicStats);
 router.get('/notifications', adminAuth, notificationController.getAdminNotifications);
 router.patch('/notifications/read-all', adminAuth, notificationController.markAllAdminNotificationsRead);
 router.patch('/notifications/:id/read', adminAuth, notificationController.markAdminNotificationRead);
+router.delete('/notifications/:id', adminAuth, notificationController.deleteAdminNotification);
+router.post('/notifications/:id/delete', adminAuth, notificationController.deleteAdminNotification);
 router.get('/umkm', adminAuth, adminController.getUmkmQueue);
 router.post('/umkm/:id/approve', adminAuth, adminController.approveUmkm);
 router.post('/umkm/:id/reject', adminAuth, adminController.rejectUmkm);
