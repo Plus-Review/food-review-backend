@@ -112,12 +112,6 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
-User.hasMany(FavoriteModel, { foreignKey: 'user_id', onDelete: 'CASCADE' });
-FavoriteModel.belongsTo(User, { foreignKey: 'user_id' });
-
-Umkm.hasMany(FavoriteModel, { foreignKey: 'umkm_id', onDelete: 'CASCADE' });
-FavoriteModel.belongsTo(Umkm, { foreignKey: 'umkm_id', as: 'umkmDetail' });
-
 app.get('/', (req, res) => {
     res.send('API Food Review Kampus Berjalan Lancar!');
 });
