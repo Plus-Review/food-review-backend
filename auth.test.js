@@ -2,13 +2,14 @@ const request = require('supertest');
 const express = require('express');
 const crypto = require('crypto');
 
+jest.mock('./models/User', () => ({
+    findOne: jest.fn(),
+    findByPk: jest.fn(),
+    create: jest.fn(),
+    count: jest.fn(),
+}));
 jest.mock('./models', () => ({
-    User: {
-        findOne: jest.fn(),
-        findByPk: jest.fn(),
-        create: jest.fn(),
-        count: jest.fn(),
-    }
+    User: require('./models/User'),
 }));
 jest.mock('bcryptjs', () => ({
     genSalt: jest.fn().mockResolvedValue('salt'),
@@ -23,7 +24,7 @@ jest.mock('./utils/mailer', () => ({
     sendPasswordResetEmail: jest.fn().mockResolvedValue({ delivered: true, development: false }),
 }));
 
-const { User } = require('./models');
+const User = require('./models/User');
 const bcrypt = require('bcryptjs');
 const { sendPasswordResetEmail, sendVerificationEmail } = require('./utils/mailer');
 const AuthController = require('./controllers/AuthController');

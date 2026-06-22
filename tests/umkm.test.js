@@ -20,7 +20,11 @@ jest.mock('multer', () => {
             next();
         }),
         array: jest.fn(() => (req, res, next) => {
-            req.files = [{ filename: 'test-image1.jpg' }, { filename: 'test-image2.jpg' }];
+            req.files = [];
+            next();
+        }),
+        fields: jest.fn(() => (req, res, next) => {
+            req.files = {};
             next();
         }),
         any: jest.fn(() => (req, res, next) => next())
@@ -42,12 +46,26 @@ jest.mock('../models', () => ({
         destroy: jest.fn()
     },
     Review: {
-        create: jest.fn()
+        create: jest.fn(),
+        findAll: jest.fn(),
+        destroy: jest.fn(),
     },
-    User: {}
+    User: {
+        findByPk: jest.fn(),
+    },
+    SavedUmkm: {
+        destroy: jest.fn(),
+    },
+}));
+jest.mock('../models/Notification', () => ({
+    create: jest.fn().mockResolvedValue({ id: 1 }),
+}));
+jest.mock('../utils/notifications', () => ({
+    createAdminNotification: jest.fn().mockResolvedValue({ id: 1 }),
+    createUserNotification: jest.fn().mockResolvedValue({ id: 2 }),
 }));
 
-const { Umkm, Review } = require('../models');
+const { Umkm, Review, User, SavedUmkm } = require('../models');
 
 // Daftarkan route ke express bohongan kita
 app.use('/api/umkm', umkmRoutes);
@@ -100,7 +118,7 @@ describe('UMKM API Regression Tests', () => {
             Umkm.findByPk.mockResolvedValue(null);
             const res = await request(app).get('/api/umkm/999');
             expect(res.status).toBe(404);
-            expect(res.body.message).toMatch(/tidak ada di database/i);
+            expect(res.body.message).toMatch(/tidak ditemukan/i);
         });
 
         it('6. [Error Scenario] harus mengembalikan 500 jika pencarian ID mengalami error server', async () => {
@@ -113,26 +131,26 @@ describe('UMKM API Regression Tests', () => {
     // ─── ENDPOINT: POST /api/umkm ───
     describe('POST /api/umkm', () => {
         it('7. [Happy Path] harus berhasil membuat UMKM baru dengan data lengkap', async () => {
-            Umkm.create.mockResolvedValue({ id: 1, nama_umkm: 'Warung Baru', image: 'test-image.jpg' });
+            Umkm.create.mockResolvedValue({ id: 1, nama_umkm: 'Warung Baru', image: null });
             const res = await request(app)
                 .post('/api/umkm')
-                .send({ nama_umkm: 'Warung Baru', harga_range: '10k-20k' });
+                .send({ nama_umkm: 'Warung Baru', jenis_makanan: 'Makanan berat', harga_range: '10k-20k' });
             expect(res.status).toBe(201);
-            expect(res.body.nama_umkm).toBe('Warung Baru');
+            expect(res.body.umkm.nama_umkm).toBe('Warung Baru');
         });
 
         it('8. [Error/Validation] harus menolak (400) dan gagal jika nama_umkm dikirim kosong', async () => {
             const res = await request(app)
                 .post('/api/umkm')
-                .send({ harga_range: '10k-20k' }); // Tanpa nama_umkm
+                .send({ jenis_makanan: 'Makanan berat', harga_range: '10k-20k' });
             expect(res.status).toBe(400);
-            expect(res.body.message).toMatch(/tidak boleh kosong/i);
+            expect(res.body.message).toMatch(/wajib diisi/i);
         });
 
         it('9. [Error/Validation] harus menolak (400) jika nama_umkm hanya berisi spasi kosong', async () => {
             const res = await request(app)
                 .post('/api/umkm')
-                .send({ nama_umkm: '   ' }); 
+                .send({ nama_umkm: '   ', jenis_makanan: 'Makanan berat' });
             expect(res.status).toBe(400);
         });
 
@@ -140,7 +158,7 @@ describe('UMKM API Regression Tests', () => {
             Umkm.create.mockRejectedValue(new Error('Tipe data kolom latitude tidak valid'));
             const res = await request(app)
                 .post('/api/umkm')
-                .send({ nama_umkm: 'Warung Gagal' });
+                .send({ nama_umkm: 'Warung Gagal', jenis_makanan: 'Makanan berat' });
             expect(res.status).toBe(500);
         });
     });
@@ -148,7 +166,14 @@ describe('UMKM API Regression Tests', () => {
     // ─── ENDPOINT: POST /api/umkm/:id/reviews ───
     describe('POST /api/umkm/:id/reviews', () => {
         it('11. [Happy Path] harus berhasil menambahkan ulasan baru dengan rating dan komentar valid', async () => {
-            Review.create.mockResolvedValue({ id: 1, rating: 5, komentar: 'Sangat enak!' });
+            Umkm.findByPk.mockResolvedValue({ id: 1, verification_status: 'approved' });
+            Review.create.mockResolvedValue({
+                id: 1,
+                rating: 5,
+                komentar: 'Sangat enak!',
+                toJSON: () => ({ id: 1, rating: 5, komentar: 'Sangat enak!', images: [] }),
+            });
+            User.findByPk.mockResolvedValue({ id: 1, username: 'Fikrank' });
             const res = await request(app)
                 .post('/api/umkm/1/reviews')
                 .send({ rating: 5, komentar: 'Sangat enak!' });
@@ -188,6 +213,7 @@ describe('UMKM API Regression Tests', () => {
         });
 
         it('16. [Error Scenario] harus mengembalikan 500 jika database gagal menyimpan review baru', async () => {
+            Umkm.findByPk.mockResolvedValue({ id: 1, verification_status: 'approved' });
             Review.create.mockRejectedValue(new Error('Gagal simpan ke MySQL'));
             const res = await request(app)
                 .post('/api/umkm/1/reviews')
@@ -199,13 +225,22 @@ describe('UMKM API Regression Tests', () => {
     // ─── ENDPOINT: PUT /api/umkm/:id ───
     describe('PUT /api/umkm/:id', () => {
         it('17. [Happy Path] harus berhasil memperbarui data UMKM yang sudah ada', async () => {
-            Umkm.update.mockResolvedValue([1]); 
-            const res = await request(app).put('/api/umkm/1').send({ nama_umkm: 'Warung Update' });
-            expect(res.status).toBe(200); 
+            Umkm.findByPk.mockResolvedValue({
+                id: 1,
+                userId: 1,
+                verification_status: 'pending_create',
+                images: [],
+                update: jest.fn().mockResolvedValue(true),
+            });
+            const res = await request(app).put('/api/umkm/1').send({
+                nama_umkm: 'Warung Update',
+                jenis_makanan: 'Makanan berat',
+            });
+            expect(res.status).toBe(200);
         });
 
         it('18. [Error Scenario] harus mengembalikan 404 jika UMKM yang mau diupdate tidak ada', async () => {
-            Umkm.update.mockResolvedValue([0]); // 0 baris berubah
+            Umkm.findByPk.mockResolvedValue(null);
             const res = await request(app).put('/api/umkm/999').send({ nama_umkm: 'Warung Update' });
             expect(res.status).toBe(404);
         });
@@ -214,13 +249,18 @@ describe('UMKM API Regression Tests', () => {
     // ─── ENDPOINT: DELETE /api/umkm/:id ───
     describe('DELETE /api/umkm/:id', () => {
         it('19. [Happy Path] harus berhasil menghapus data UMKM', async () => {
-            Umkm.destroy.mockResolvedValue(1); 
+            const destroy = jest.fn().mockResolvedValue(true);
+            Umkm.findByPk.mockResolvedValue({ id: 1, userId: 1, images: [], destroy });
+            Review.findAll.mockResolvedValue([]);
+            Review.destroy.mockResolvedValue(0);
+            SavedUmkm.destroy.mockResolvedValue(0);
             const res = await request(app).delete('/api/umkm/1');
             expect(res.status).toBe(200);
+            expect(destroy).toHaveBeenCalledTimes(1);
         });
 
         it('20. [Error Scenario] harus mengembalikan 404 jika UMKM yang mau dihapus tidak ditemukan', async () => {
-            Umkm.destroy.mockResolvedValue(0); // 0 baris terhapus
+            Umkm.findByPk.mockResolvedValue(null);
             const res = await request(app).delete('/api/umkm/999');
             expect(res.status).toBe(404);
         });

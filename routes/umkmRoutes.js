@@ -29,8 +29,8 @@ router.put('/:id', auth, umkmController.updateUmkm);
 router.delete('/:id', auth, umkmController.deleteUmkm);
 router.post('/:id/save', auth, umkmController.saveUmkm);
 router.delete('/:id/save', auth, umkmController.unsaveUmkm);
-router.post('/:id/reviews', auth, umkmController.addReview);
-router.put('/:id/reviews/:reviewId', auth, umkmController.updateReview);
+router.post('/:id/reviews', auth, validateReview, checkValidation, umkmController.addReview);
+router.put('/:id/reviews/:reviewId', auth, validateReview, checkValidation, umkmController.updateReview);
 router.delete('/:id/reviews/:reviewId', auth, umkmController.deleteReview);
 
 module.exports = router;
