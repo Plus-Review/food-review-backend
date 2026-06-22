@@ -213,21 +213,6 @@ const serializeUserActivity = (review) => {
     };
 };
 
-exports.getAllUmkm = async (req, res) => {
-    try {
-        const umkms = await Umkm.findAll({
-            where: approvedWhere,
-            include: [reviewInclude],
-            order: [['createdAt', 'DESC']],
-        });
-
-        res.status(200).json(umkms);
-    } catch (error) {
-        console.error('Gagal mengambil data UMKM:', error.message);
-        res.status(500).json({ message: getSafeErrorMessage(error) });
-    }
-};
-
 exports.getMyUmkm = async (req, res) => {
     try {
         const userId = getAuthUserId(req);
@@ -332,13 +317,15 @@ exports.createUmkm = (req, res) => {
 exports.getAllUmkm = async (req, res) => {
     try {
         const umkms = await Umkm.findAll({
-            where: { status: 'approved' }, // 🌟 HANYA TAMPILKAN YANG SUDAH DIVALIDASI
-            include: [{ model: Review, as: 'reviews', required: false }],
-            order: [['createdAt', 'DESC']] 
+            where: approvedWhere,
+            include: [reviewInclude],
+            order: [['createdAt', 'DESC']],
         });
+
         res.status(200).json(umkms);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('Gagal mengambil data UMKM:', error.message);
+        res.status(500).json({ message: getSafeErrorMessage(error) });
     }
 };
 

@@ -38,6 +38,9 @@ const apiLimiter = rateLimit({
     limit: 500,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
+    skip: () =>
+        process.env.NODE_ENV !== 'production' &&
+        process.env.PERFORMANCE_TEST === 'true',
     message: { message: 'Terlalu banyak request. Coba lagi beberapa menit.' },
 });
 
