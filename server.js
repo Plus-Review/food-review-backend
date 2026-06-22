@@ -2,43 +2,115 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { sequelize } = require('./models');
+const { ensureDefaultAdmins } = require('./utils/adminSeed');
+const { isMailerConfigured, verifyMailerConnection } = require('./utils/mailer');
 const path = require('path');
-const os = require('os');
-const cluster = require('cluster');
-const bcrypt = require('bcryptjs'); // 🌟 PERBAIKAN 1: Import bcryptjs
-const numCPUs = os.cpus().length;
-
-// ─── IMPORT DATABASE & MODELS ───
-const sequelize = require('./config/db');
-const { DataTypes } = require('sequelize');
-const User = require('./models/User');
-const Umkm = require('./models/Umkm');
-const Review = require('./models/Review'); 
-const FavoriteModel = require('./models/Favorite')(sequelize, DataTypes);
-
 const app = express();
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
+const allowedOrigins = (process.env.CLIENT_URL || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
-// 🌟 1. MIDDLEWARE WAJIB DI ATAS
-app.use(cors());
-app.use(helmet());
-app.use(express.json());
-app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
+const hasWeakJwtSecret = !process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16;
+if (hasWeakJwtSecret) {
+    const message = 'JWT_SECRET wajib berupa secret panjang dan acak minimal 16 karakter.';
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error(message);
+    }
+    console.warn(`Peringatan: ${message}`);
+}
 
-// 🌟 2. DAFTARKAN ROUTES
+if (process.env.NODE_ENV === 'production' && !isMailerConfigured()) {
+    throw new Error('Konfigurasi SMTP wajib diisi agar verifikasi email dan reset password dapat digunakan.');
+}
+
+if (process.env.VERCEL && !process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error('BLOB_READ_WRITE_TOKEN wajib diisi agar upload gambar tersimpan permanen di Vercel.');
+}
+
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 500,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { message: 'Terlalu banyak request. Coba lagi beberapa menit.' },
+});
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { message: 'Percobaan login/registrasi terlalu sering. Coba lagi nanti.' },
+});
+
+const credentialRecoveryLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { message: 'Permintaan keamanan akun terlalu sering. Coba lagi dalam 15 menit.' },
+});
+
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin) || (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production')) {
+            callback(null, true);
+            return;
+        }
+
+        callback(new Error('Origin tidak diizinkan oleh konfigurasi CORS.'));
+    },
+}));
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+app.use(async (req, res, next) => {
+    try {
+        await initializeServices();
+        next();
+    } catch (error) {
+        console.error('Gagal menginisialisasi layanan:', error.message);
+        res.status(503).json({ message: 'Layanan belum siap. Coba lagi beberapa saat.' });
+    }
+});
+app.use('/api', apiLimiter);
+app.use(['/api/auth/login', '/api/auth/register', '/api/admin/login'], authLimiter);
+app.use([
+    '/api/auth/verify-email',
+    '/api/auth/resend-verification',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password',
+], credentialRecoveryLimiter);
 app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/umkm', require('./routes/umkmRoutes'));
-app.use('/api/favorit', require('./routes/favoriteRoutes'));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+    fallthrough: false,
+    maxAge: '7d',
+    immutable: true,
+    setHeaders: (res) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Disposition', 'inline');
+    },
+}));
 
-// 🌟 3. RELASI MODEL
-User.hasMany(Umkm, { foreignKey: 'userId', onDelete: 'CASCADE' });
-Umkm.belongsTo(User, { foreignKey: 'userId' });
-
-Umkm.hasMany(Review, { foreignKey: 'umkmId', onDelete: 'CASCADE' });
-Review.belongsTo(Umkm, { foreignKey: 'umkmId' });
-
-User.hasMany(Review, { foreignKey: 'userId', onDelete: 'CASCADE' });
-Review.belongsTo(User, { foreignKey: 'userId' });
+app.get('/api/health', async (req, res) => {
+    try {
+        await sequelize.authenticate();
+        res.status(200).json({ status: 'ok', service: 'plus-review-api' });
+    } catch {
+        res.status(503).json({ status: 'unavailable', service: 'plus-review-api' });
+    }
+});
 
 User.hasMany(FavoriteModel, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 FavoriteModel.belongsTo(User, { foreignKey: 'user_id' });
@@ -50,64 +122,102 @@ app.get('/', (req, res) => {
     res.send('API Food Review Kampus Berjalan Lancar!');
 });
 
-const PORT = process.env.PORT || 5000;
-
-// 🌟 FUNGSI PEMBUAT ADMIN (Dipindahkan ke atas agar bisa dibaca oleh Cluster)
-const createDefaultAdmin = async () => {
-    try {
-        const adminExists = await User.findOne({ where: { role: 'admin' } });
-
-        if (!adminExists) {
-            console.log('⏳ Sedang membuat akun Admin default...');
-            const salt = await bcrypt.genSalt(10);
-            const hashedPassword = await bcrypt.hash('admin123', salt);
-
-            await User.create({
-                username: 'Super Admin',
-                email: 'admin@plusreview.com',
-                password: hashedPassword,
-                role: 'admin'
-            });
-            console.log('✅ Akun Admin berhasil dibuat!');
-            console.log('📧 Email : admin@plusreview.com');
-            console.log('🔑 Pass  : admin123');
-        } else {
-            console.log('ℹ️ Akun Admin sudah tersedia di database.');
-        }
-    } catch (error) {
-        console.error('❌ Gagal membuat akun admin:', error.message);
+app.use((err, req, res, next) => {
+    if (res.headersSent) {
+        next(err);
+        return;
     }
+
+    if (err?.type === 'entity.too.large') {
+        return res.status(413).json({ message: 'Payload terlalu besar.' });
+    }
+
+    if (err?.message?.includes('CORS')) {
+        return res.status(403).json({ message: 'Origin tidak diizinkan.' });
+    }
+
+    res.status(err?.status || 500).json({
+        message: process.env.NODE_ENV === 'production'
+            ? 'Terjadi kesalahan server.'
+            : err?.message || 'Terjadi kesalahan server.',
+    });
+});
+
+const PORT = process.env.PORT || 5000;
+const shouldAlterSchema = process.env.DB_SYNC_ALTER === 'true'
+    || (process.env.NODE_ENV !== 'production' && process.env.DB_SYNC_ALTER !== 'false');
+const syncOptions = shouldAlterSchema ? { alter: true } : {};
+const smtpVerifySetting = String(process.env.SMTP_VERIFY_ON_START || '').toLowerCase();
+const shouldVerifySmtpOnStart = smtpVerifySetting === 'true'
+    || (process.env.NODE_ENV === 'production' && !process.env.VERCEL && smtpVerifySetting !== 'false');
+
+let httpServer;
+let initializationPromise;
+
+const initializeServices = () => {
+    if (!initializationPromise) {
+        initializationPromise = sequelize.sync(syncOptions)
+            .then(async () => {
+                if (shouldVerifySmtpOnStart) {
+                    await verifyMailerConnection();
+                    console.log('--- Koneksi SMTP Berhasil Diverifikasi ---');
+                }
+                await ensureDefaultAdmins();
+                console.log('--- Database & Tabel Berhasil Disinkronkan ---');
+            })
+            .catch((error) => {
+                initializationPromise = null;
+                throw error;
+            });
+    }
+
+    return initializationPromise;
 };
 
-// 🌟 4. LOGIKA CLUSTER & SYNC DIPERBAIKI SANGAT AMAN
-if (cluster.isMaster) {
-    console.log(`Master Node sedang berjalan dengan PID ${process.pid}`);
-    
-    // PERBAIKAN 2, 3, & 4: 
-    // Sinkronisasi dan pembuatan admin HANYA DILAKUKAN SEKALI di Master Node!
-    sequelize.sync({ alter: true }) // Gunakan alter: true untuk menambah kolom role & status
-        .then(async () => {
-            console.log(`--- Database & Tabel Berhasil Disinkronkan ---`);
-            
-            // Panggil fungsinya di sini!
-            await createDefaultAdmin(); 
-
-            console.log(`Menyiapkan ${numCPUs} pekerja (workers) untuk menahan beban...`);
-            for (let i = 0; i < numCPUs; i++) {
-                cluster.fork();
-            }
+if (require.main === module) {
+    initializeServices()
+        .then(() => {
+            httpServer = app.listen(PORT, () => {
+                console.log(`Server aktif di: http://localhost:${PORT}`);
+            });
         })
-        .catch((err) => {
-            console.error('Gagal sinkronisasi database:', err);
+        .catch(async (err) => {
+            console.error('Gagal memulai server:', err);
+            try {
+                await sequelize.close();
+            } finally {
+                process.exit(1);
+            }
         });
-
-    cluster.on('exit', (worker, code, signal) => {
-        console.log(`Pekerja ${worker.process.pid} mati. Menghidupkan ulang...`);
-        cluster.fork();
-    });
-} else {
-    // Pekerja (Worker) tugasnya hanya menjalankan server Express, tidak mengotak-atik database
-    app.listen(PORT, () => {
-        console.log(`Server aktif di: http://localhost:${PORT} (Worker ${process.pid})`);
-    });
 }
+
+const shutdown = (signal) => {
+    console.log(`${signal} diterima. Menutup server dengan aman...`);
+
+    const forceExitTimer = setTimeout(() => process.exit(1), 10000);
+    forceExitTimer.unref();
+
+    const closeDatabase = async () => {
+        try {
+            await sequelize.close();
+            process.exit(0);
+        } catch (error) {
+            console.error('Gagal menutup koneksi database:', error.message);
+            process.exit(1);
+        }
+    };
+
+    if (httpServer) {
+        httpServer.close(closeDatabase);
+        return;
+    }
+
+    void closeDatabase();
+};
+
+if (!process.env.VERCEL) {
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    process.once('SIGINT', () => shutdown('SIGINT'));
+}
+
+module.exports = app;

@@ -20,49 +20,17 @@ const checkValidation = (req, res, next) => {
    1. RUTE STATIS (Harus di atas /:id)
 ========================================================= */
 router.get('/', umkmController.getAllUmkm);
-router.get('/admin/stats', auth, admin, umkmController.getAdminStats);
-// Rute Khusus Admin
-router.get('/admin/pending', auth, admin, umkmController.getPendingUmkm);
-
-// User biasa BOLEH CREATE (otomatis statusnya 'pending' dari DB)
-router.post('/', auth, umkmController.uploadMiddleware, umkmController.createUmkm);
-
-
-/* =========================================================
-   2. RUTE DINAMIS DENGAN SUFFIX (Harus di atas /:id yang berdiri sendiri)
-========================================================= */
-// Admin memvalidasi UMKM
-router.put('/:id/verify', auth, admin, umkmController.verifyUmkm);
-
-// Review: Create
-router.post(
-    '/:id/reviews', 
-    auth, 
-    umkmController.uploadMiddleware, 
-    validateReview, 
-    checkValidation, 
-    umkmController.addReview
-);
-
-// Review: Update & Delete
-router.put(
-    '/:id/reviews/:reviewId', 
-    auth, 
-    umkmController.uploadMiddleware, 
-    validateReview, 
-    checkValidation, 
-    umkmController.updateReview
-);
-router.delete('/:id/reviews/:reviewId', auth, umkmController.deleteReview);
-
-
-/* =========================================================
-   3. RUTE DINAMIS PARAMETER TUNGGAL (Harus Paling Bawah)
-========================================================= */
+router.get('/saved', auth, umkmController.getSavedUmkm);
+router.get('/activity', auth, umkmController.getUserActivity);
+router.get('/mine', auth, umkmController.getMyUmkm);
+router.post('/', auth, umkmController.createUmkm);
 router.get('/:id', umkmController.getUmkmById);
-
-// HANYA ADMIN YANG BOLEH UPDATE & DELETE UMKM
-router.put('/:id', auth, admin, umkmController.uploadMiddleware, umkmController.updateUmkm);
-router.delete('/:id', auth, admin, umkmController.deleteUmkm);
+router.put('/:id', auth, umkmController.updateUmkm);
+router.delete('/:id', auth, umkmController.deleteUmkm);
+router.post('/:id/save', auth, umkmController.saveUmkm);
+router.delete('/:id/save', auth, umkmController.unsaveUmkm);
+router.post('/:id/reviews', auth, umkmController.addReview);
+router.put('/:id/reviews/:reviewId', auth, umkmController.updateReview);
+router.delete('/:id/reviews/:reviewId', auth, umkmController.deleteReview);
 
 module.exports = router;
