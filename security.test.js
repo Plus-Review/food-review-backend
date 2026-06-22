@@ -8,6 +8,7 @@ const {
     isValidEmail,
     normalizeCategory,
     normalizeFilename,
+    normalizeImageReference,
     normalizeImageList,
     parseCoordinate,
     parsePositiveInt,
@@ -43,6 +44,14 @@ describe('Unit Test: Utilitas Security dan Sanitasi', () => {
         expect(normalizeFilename('../rahasia.png')).toBe('');
         expect(normalizeFilename('script.exe')).toBe('');
         expect(normalizeImageList(['a.jpg', '../b.png', 'c.webp'])).toEqual(['a.jpg', 'c.webp']);
+    });
+
+    it('Harus menerima URL Vercel Blob dan menolak URL gambar arbitrer', () => {
+        const blobUrl = 'https://abc.public.blob.vercel-storage.com/plus-review/foto.webp';
+
+        expect(normalizeImageReference(blobUrl)).toBe(blobUrl);
+        expect(normalizeImageReference('https://example.com/foto.webp')).toBe('');
+        expect(normalizeImageList([blobUrl, 'https://example.com/foto.webp'])).toEqual([blobUrl]);
     });
 
     it('Harus membuat path upload tetap berada di folder uploads', () => {

@@ -1,38 +1,29 @@
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
-const path = require('path');
-const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const { Umkm, Review, User } = require('../models');
 const {
     cleanText,
-    createUploadFilename,
     getSafeErrorMessage,
     imageFileFilter,
     normalizeImageList,
     parsePositiveInt,
-    resolveUploadPath,
 } = require('../utils/security');
+const {
+    createUploadStorage,
+    deleteStoredImage,
+    persistUploadedFile,
+} = require('../utils/uploadStorage');
 const { ensureDefaultAdmins } = require('../utils/adminSeed');
 const { isDefaultAdminUsername, normalizeAdminUsername } = require('../utils/adminCredentials');
 const { createUserNotification } = require('../utils/notifications');
 
-const uploadsDir = path.join(__dirname, '..', 'uploads');
 const DUMMY_ADMIN_HASH = '$2b$12$hhl.ppqnR5TahN/zWQMFneDnDf6HdBoyQEaGjrqbYG6KzCnhcg6py';
 const passwordRuleMessage = 'Password wajib memiliki huruf besar, huruf kecil, angka, dan karakter unik.';
 
-fs.mkdirSync(uploadsDir, { recursive: true });
-
-const adminProfileStorage = multer.diskStorage({
-    destination: uploadsDir,
-    filename: (req, file, cb) => {
-        cb(null, createUploadFilename('admin-profile', file));
-    },
-});
-
 const adminProfileUpload = multer({
-    storage: adminProfileStorage,
+    storage: createUploadStorage('admin-profile'),
     limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 6 },
     fileFilter: imageFileFilter('Foto profil admin'),
 }).single('profileImage');
@@ -58,16 +49,7 @@ const ownerInclude = {
 };
 
 const deleteUploadedImage = (filename) => {
-    if (!filename) return;
-
-    const imagePath = resolveUploadPath(uploadsDir, filename);
-    if (!imagePath) return;
-
-    fs.unlink(imagePath, (err) => {
-        if (err && err.code !== 'ENOENT') {
-            console.error('Gagal menghapus file gambar admin:', err.message);
-        }
-    });
+    deleteStoredImage(filename, 'gambar admin');
 };
 
 const deleteUploadedImages = (filenames = []) => {
@@ -109,9 +91,14 @@ const isStrongPassword = (password) => (
 );
 
 exports.uploadProfileImage = (req, res, next) => {
-    adminProfileUpload(req, res, (err) => {
+    adminProfileUpload(req, res, async (err) => {
         if (!err) {
-            next();
+            try {
+                await persistUploadedFile(req.file, 'admin-profile');
+                next();
+            } catch {
+                res.status(503).json({ message: 'Foto profil admin belum bisa disimpan. Coba lagi beberapa saat.' });
+            }
             return;
         }
 

@@ -29,6 +29,10 @@ if (process.env.NODE_ENV === 'production' && !isMailerConfigured()) {
     throw new Error('Konfigurasi SMTP wajib diisi agar verifikasi email dan reset password dapat digunakan.');
 }
 
+if (process.env.VERCEL && !process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error('BLOB_READ_WRITE_TOKEN wajib diisi agar upload gambar tersimpan permanen di Vercel.');
+}
+
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 500,
@@ -68,6 +72,15 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+app.use(async (req, res, next) => {
+    try {
+        await initializeServices();
+        next();
+    } catch (error) {
+        console.error('Gagal menginisialisasi layanan:', error.message);
+        res.status(503).json({ message: 'Layanan belum siap. Coba lagi beberapa saat.' });
+    }
+});
 app.use('/api', apiLimiter);
 app.use(['/api/auth/login', '/api/auth/register', '/api/admin/login'], authLimiter);
 app.use([
@@ -130,30 +143,47 @@ const shouldAlterSchema = process.env.DB_SYNC_ALTER === 'true'
 const syncOptions = shouldAlterSchema ? { alter: true } : {};
 const smtpVerifySetting = String(process.env.SMTP_VERIFY_ON_START || '').toLowerCase();
 const shouldVerifySmtpOnStart = smtpVerifySetting === 'true'
-    || (process.env.NODE_ENV === 'production' && smtpVerifySetting !== 'false');
+    || (process.env.NODE_ENV === 'production' && !process.env.VERCEL && smtpVerifySetting !== 'false');
 
 let httpServer;
+let initializationPromise;
 
-sequelize.sync(syncOptions)
-    .then(async () => {
-        if (shouldVerifySmtpOnStart) {
-            await verifyMailerConnection();
-            console.log('--- Koneksi SMTP Berhasil Diverifikasi ---');
-        }
-        await ensureDefaultAdmins();
-        console.log('--- Database & Tabel Berhasil Disinkronkan ---');
-        httpServer = app.listen(PORT, () => {
-            console.log(`Server aktif di: http://localhost:${PORT}`);
+const initializeServices = () => {
+    if (!initializationPromise) {
+        initializationPromise = sequelize.sync(syncOptions)
+            .then(async () => {
+                if (shouldVerifySmtpOnStart) {
+                    await verifyMailerConnection();
+                    console.log('--- Koneksi SMTP Berhasil Diverifikasi ---');
+                }
+                await ensureDefaultAdmins();
+                console.log('--- Database & Tabel Berhasil Disinkronkan ---');
+            })
+            .catch((error) => {
+                initializationPromise = null;
+                throw error;
+            });
+    }
+
+    return initializationPromise;
+};
+
+if (require.main === module) {
+    initializeServices()
+        .then(() => {
+            httpServer = app.listen(PORT, () => {
+                console.log(`Server aktif di: http://localhost:${PORT}`);
+            });
+        })
+        .catch(async (err) => {
+            console.error('Gagal memulai server:', err);
+            try {
+                await sequelize.close();
+            } finally {
+                process.exit(1);
+            }
         });
-    })
-    .catch(async (err) => {
-        console.error('Gagal memulai server:', err);
-        try {
-            await sequelize.close();
-        } finally {
-            process.exit(1);
-        }
-    });
+}
 
 const shutdown = (signal) => {
     console.log(`${signal} diterima. Menutup server dengan aman...`);
@@ -179,5 +209,9 @@ const shutdown = (signal) => {
     void closeDatabase();
 };
 
-process.once('SIGTERM', () => shutdown('SIGTERM'));
-process.once('SIGINT', () => shutdown('SIGINT'));
+if (!process.env.VERCEL) {
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    process.once('SIGINT', () => shutdown('SIGINT'));
+}
+
+module.exports = app;

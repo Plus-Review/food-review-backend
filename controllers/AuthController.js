@@ -3,33 +3,25 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const { Op } = require('sequelize');
 const {
     cleanEmail,
     cleanText,
-    createUploadFilename,
     getSafeErrorMessage,
     imageFileFilter,
     isValidEmail,
 } = require('../utils/security');
+const {
+    createUploadStorage,
+    deleteStoredImage,
+    persistUploadedFile,
+} = require('../utils/uploadStorage');
 const { isDefaultAdminUsername, normalizeAdminUsername } = require('../utils/adminCredentials');
 const { ensureDefaultAdmins } = require('../utils/adminSeed');
 const { sendPasswordResetEmail, sendVerificationEmail } = require('../utils/mailer');
 
-const uploadsDir = path.join(__dirname, '..', 'uploads');
-fs.mkdirSync(uploadsDir, { recursive: true });
-
-const profileStorage = multer.diskStorage({
-    destination: uploadsDir,
-    filename: (req, file, cb) => {
-        cb(null, createUploadFilename('profile', file));
-    },
-});
-
 const profileUpload = multer({
-    storage: profileStorage,
+    storage: createUploadStorage('profile'),
     limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 8 },
     fileFilter: imageFileFilter('Foto profil'),
 }).single('profileImage');
@@ -85,9 +77,14 @@ const getDevelopmentValue = (value) => (
 );
 
 exports.uploadProfileImage = (req, res, next) => {
-    profileUpload(req, res, (err) => {
+    profileUpload(req, res, async (err) => {
         if (!err) {
-            next();
+            try {
+                await persistUploadedFile(req.file, 'profile');
+                next();
+            } catch {
+                res.status(503).json({ message: 'Foto profil belum bisa disimpan. Coba lagi beberapa saat.' });
+            }
             return;
         }
 
@@ -451,6 +448,7 @@ exports.getStats = async (req, res) => {
 };
 
 exports.updateProfile = async (req, res) => {
+    const uploadedImage = req.file?.filename || null;
     try {
         const user = await User.findByPk(req.user.id);
         if (!user) {
@@ -519,6 +517,7 @@ exports.updateProfile = async (req, res) => {
             user.tokenVersion = Number(user.tokenVersion || 0) + 1;
         }
 
+        const previousImage = req.file ? user.profileImage : null;
         if (req.file) {
             user.profileImage = req.file.filename;
         }
@@ -528,6 +527,7 @@ exports.updateProfile = async (req, res) => {
         }
 
         await user.save();
+        if (previousImage) deleteStoredImage(previousImage, 'foto profil lama');
 
         let delivery = { delivered: false, development: false };
         if (verificationCode) {
@@ -556,6 +556,7 @@ exports.updateProfile = async (req, res) => {
                 : undefined,
         });
     } catch (err) {
+        if (uploadedImage) deleteStoredImage(uploadedImage, 'foto profil');
         if (err.name === 'SequelizeUniqueConstraintError') {
             return res.status(409).json({ message: "Nama atau email sudah digunakan." });
         }

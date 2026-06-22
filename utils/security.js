@@ -121,9 +121,25 @@ const normalizeFilename = (filename) => {
     return basename;
 };
 
+const normalizeImageReference = (reference) => {
+    const value = cleanText(reference, 500);
+    if (!value) return '';
+
+    try {
+        const url = new URL(value);
+        if (url.protocol === 'https:' && url.hostname.endsWith('.blob.vercel-storage.com')) {
+            return url.toString();
+        }
+    } catch {
+        // Local uploads are stored as plain filenames.
+    }
+
+    return normalizeFilename(value);
+};
+
 const normalizeImageList = (images) => (
     Array.isArray(images)
-        ? images.map(normalizeFilename).filter(Boolean)
+        ? images.map(normalizeImageReference).filter(Boolean)
         : []
 );
 
@@ -152,6 +168,7 @@ module.exports = {
     isValidEmail,
     normalizeCategory,
     normalizeFilename,
+    normalizeImageReference,
     normalizeImageList,
     parseCoordinate,
     parsePositiveInt,

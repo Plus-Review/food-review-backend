@@ -2,36 +2,27 @@ const { Umkm, Review, User, SavedUmkm } = require('../models');
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const {
     cleanText,
-    createUploadFilename,
     getSafeErrorMessage,
     imageFileFilter,
     normalizeCategory,
     normalizeImageList,
     parseCoordinate,
     parsePositiveInt,
-    resolveUploadPath,
 } = require('../utils/security');
+const {
+    createUploadStorage,
+    deleteStoredImage,
+    persistRequestFiles,
+} = require('../utils/uploadStorage');
 const {
     createAdminNotification,
     createUserNotification,
 } = require('../utils/notifications');
 
-const uploadsDir = path.join(__dirname, '..', 'uploads');
-fs.mkdirSync(uploadsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: uploadsDir,
-    filename: (req, file, cb) => {
-        cb(null, createUploadFilename('umkm', file));
-    },
-});
-
 const upload = multer({
-    storage,
+    storage: createUploadStorage('umkm'),
     limits: { fileSize: 4 * 1024 * 1024, files: 8, fields: 24, fieldSize: 512 * 1024 },
     fileFilter: imageFileFilter('Foto UMKM'),
 }).fields([
@@ -40,7 +31,7 @@ const upload = multer({
 ]);
 
 const reviewUpload = multer({
-    storage,
+    storage: createUploadStorage('review'),
     limits: { fileSize: 2 * 1024 * 1024, files: 4, fields: 8, fieldSize: 256 * 1024 },
     fileFilter: imageFileFilter('Foto review'),
 }).array('review_images', 4);
@@ -108,16 +99,7 @@ const parseImageList = (value) => {
 };
 
 const deleteUploadedImage = (filename) => {
-    if (!filename) return;
-
-    const imagePath = resolveUploadPath(uploadsDir, filename);
-    if (!imagePath) return;
-
-    fs.unlink(imagePath, (err) => {
-        if (err && err.code !== 'ENOENT') {
-            console.error('Gagal menghapus file gambar:', err.message);
-        }
-    });
+    deleteStoredImage(filename, 'gambar UMKM');
 };
 
 const deleteUploadedImages = (filenames = []) => {
@@ -275,6 +257,7 @@ exports.createUmkm = (req, res) => {
         }
 
         try {
+            await persistRequestFiles(req.files, 'umkm');
             const { data: payload, error: validationError } = getValidatedUmkmPayload(req.body);
             const userId = getAuthUserId(req);
             const primaryImage = getPrimaryImageFile(req.files);
@@ -370,6 +353,7 @@ exports.updateUmkm = (req, res) => {
         }
 
         try {
+            await persistRequestFiles(req.files, 'umkm');
             const id = parsePositiveInt(req.params.id);
             const userId = getAuthUserId(req);
 
@@ -701,6 +685,7 @@ exports.addReview = (req, res) => {
         }
 
         try {
+            await persistRequestFiles(req.files, 'review');
             const umkmId = parsePositiveInt(req.params.id);
             const { rating, komentar } = req.body;
             const userId = getAuthUserId(req);
@@ -777,6 +762,7 @@ exports.updateReview = (req, res) => {
         }
 
         try {
+            await persistRequestFiles(req.files, 'review');
             const userId = getAuthUserId(req);
             const umkmId = parsePositiveInt(req.params.id);
             const reviewId = parsePositiveInt(req.params.reviewId);
