@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const umkmController = require('../controllers/UmkmController');
 const auth = require('../middleware/authMiddleware'); 
+const admin = require('../middleware/adminMiddleware');
 const { body, validationResult } = require('express-validator');
 
 const validateReview = [
@@ -15,16 +16,53 @@ const checkValidation = (req, res, next) => {
     next();
 };
 
-// ─── DEFINISI ROUTE UMKM ───
+/* =========================================================
+   1. RUTE STATIS (Harus di atas /:id)
+========================================================= */
 router.get('/', umkmController.getAllUmkm);
+router.get('/admin/stats', auth, admin, umkmController.getAdminStats);
+// Rute Khusus Admin
+router.get('/admin/pending', auth, admin, umkmController.getPendingUmkm);
+
+// User biasa BOLEH CREATE (otomatis statusnya 'pending' dari DB)
+router.post('/', auth, umkmController.uploadMiddleware, umkmController.createUmkm);
+
+
+/* =========================================================
+   2. RUTE DINAMIS DENGAN SUFFIX (Harus di atas /:id yang berdiri sendiri)
+========================================================= */
+// Admin memvalidasi UMKM
+router.put('/:id/verify', auth, admin, umkmController.verifyUmkm);
+
+// Review: Create
+router.post(
+    '/:id/reviews', 
+    auth, 
+    umkmController.uploadMiddleware, 
+    validateReview, 
+    checkValidation, 
+    umkmController.addReview
+);
+
+// Review: Update & Delete
+router.put(
+    '/:id/reviews/:reviewId', 
+    auth, 
+    umkmController.uploadMiddleware, 
+    validateReview, 
+    checkValidation, 
+    umkmController.updateReview
+);
+router.delete('/:id/reviews/:reviewId', auth, umkmController.deleteReview);
+
+
+/* =========================================================
+   3. RUTE DINAMIS PARAMETER TUNGGAL (Harus Paling Bawah)
+========================================================= */
 router.get('/:id', umkmController.getUmkmById);
-router.post('/', auth, umkmController.createUmkm);
 
-// 🌟 TAMBAHAN UNTUK LULUS TEST 17-20 (UPDATE & DELETE)
-router.put('/:id', auth, umkmController.updateUmkm);
-router.delete('/:id', auth, umkmController.deleteUmkm);
-
-// 🌟 ROUTE REVIEW (Hanya 1 kali, lengkap dengan validasi)
-router.post('/:id/reviews', auth, validateReview, checkValidation, umkmController.addReview);
+// HANYA ADMIN YANG BOLEH UPDATE & DELETE UMKM
+router.put('/:id', auth, admin, umkmController.uploadMiddleware, umkmController.updateUmkm);
+router.delete('/:id', auth, admin, umkmController.deleteUmkm);
 
 module.exports = router;

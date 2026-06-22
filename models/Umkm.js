@@ -10,8 +10,13 @@ const Umkm = sequelize.define('Umkm', {
   latitude: { type: DataTypes.DOUBLE }, 
   longitude: { type: DataTypes.DOUBLE }, 
   avg_rating: { type: DataTypes.FLOAT, defaultValue: 0 },
-  image: { type: DataTypes.STRING }, // Menyimpan nama file (contoh: 171534.jpg)
-  userId: { type: DataTypes.INTEGER } // Penting untuk relasi pemilik UMKM
+  image: { type: DataTypes.STRING }, // Menyimpan foto sampul (1 foto)
+  images: { type: DataTypes.TEXT },  // 🌟 TAMBAHAN: Menyimpan galeri foto (Format JSON Array)
+  status: { 
+      type: DataTypes.STRING, 
+      defaultValue: 'pending' // Default saat baru ditambah user adalah 'pending'
+  },
+  userId: { type: DataTypes.INTEGER }
 });
 
 module.exports = Umkm;
