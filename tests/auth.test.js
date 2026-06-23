@@ -5,74 +5,84 @@ jest.mock('../models/User', () => ({
     create: jest.fn(),
     findOne: jest.fn(),
 }));
+jest.mock('../models/PendingRegistration', () => ({
+    destroy: jest.fn(),
+    findOne: jest.fn(),
+    create: jest.fn(),
+    sequelize: { transaction: jest.fn() },
+}));
 jest.mock('../models', () => ({
     User: require('../models/User'),
 }));
-
 jest.mock('bcryptjs', () => ({
     genSalt: jest.fn(),
     hash: jest.fn(),
-    compare: jest.fn()
+    compare: jest.fn(),
 }));
-
 jest.mock('jsonwebtoken', () => ({
-    sign: jest.fn()
+    sign: jest.fn(),
 }));
 jest.mock('../utils/adminSeed', () => ({
     ensureDefaultAdmins: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../utils/mailer', () => ({
-    sendVerificationEmail: jest.fn().mockResolvedValue({ delivered: true, development: false }),
-    sendPasswordResetEmail: jest.fn().mockResolvedValue({ delivered: true, development: false }),
+    sendVerificationEmail: jest.fn(),
+    sendPasswordResetEmail: jest.fn(),
 }));
 
-// 🌟 2. IMPORT CONTROLLER SETELAH MOCKING SELESAI
 const authController = require('../controllers/AuthController');
 const User = require('../models/User');
+const PendingRegistration = require('../models/PendingRegistration');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { sendVerificationEmail } = require('../utils/mailer');
 
-// 🌟 3. SETUP EXPRESS BOHONGAN
 const app = express();
 app.use(express.json());
 app.post('/api/auth/register', authController.register);
 app.post('/api/auth/login', authController.login);
 
-// ==========================================
-//        MULAI TEST SUITE AUTHENTICATION
-// ==========================================
-
 describe('Auth Controller Tests', () => {
     beforeEach(() => {
-        jest.clearAllMocks();
+        jest.resetAllMocks();
         process.env.JWT_SECRET = 'unit-test-secret-key';
+        User.findOne.mockResolvedValue(null);
+        bcrypt.genSalt.mockResolvedValue('randomSalt');
+        bcrypt.hash.mockResolvedValue('hashedPassword');
+        sendVerificationEmail.mockResolvedValue({ delivered: true, development: false });
+        PendingRegistration.destroy.mockResolvedValue(0);
+        PendingRegistration.findOne.mockResolvedValue(null);
+        PendingRegistration.create.mockResolvedValue({
+            destroy: jest.fn().mockResolvedValue(undefined),
+        });
     });
 
     describe('POST /api/auth/register', () => {
-        it('1. [Happy Path] harus berhasil mendaftarkan user baru', async () => {
-            bcrypt.genSalt.mockResolvedValue('randomSalt');
-            bcrypt.hash.mockResolvedValue('hashedPassword');
-            User.create.mockResolvedValue({ id: 1, username: 'Fikrank', email: 'test@mail.com' });
+        it('1. [Happy Path] harus menyimpan registrasi pending', async () => {
+            const res = await request(app).post('/api/auth/register').send({
+                username: 'Fikrank',
+                email: 'test@mail.com',
+                password: 'Password123!',
+            });
+
+            expect(res.status).toBe(201);
+            expect(res.body.message).toContain('Kode verifikasi telah dikirim');
+            expect(PendingRegistration.create).toHaveBeenCalledTimes(1);
+            expect(User.create).not.toHaveBeenCalled();
+        });
+
+        it('2. [Error Scenario] harus mengembalikan 500 jika simpan pending gagal', async () => {
+            PendingRegistration.create.mockRejectedValueOnce(new Error('Database Down'));
 
             const res = await request(app).post('/api/auth/register').send({
                 username: 'Fikrank',
                 email: 'test@mail.com',
-                password: 'Password123!'
-            });
-
-            expect(res.status).toBe(201);
-            expect(res.body.message).toContain('Akun berhasil dibuat');
-        });
-
-        it('2. [Error Scenario] harus mengembalikan 500 jika gagal register', async () => {
-            User.create.mockRejectedValue(new Error('Email sudah digunakan'));
-
-            const res = await request(app).post('/api/auth/register').send({
-                username: 'Fikrank', email: 'test@mail.com', password: 'Password123!'
+                password: 'Password123!',
             });
 
             expect(res.status).toBe(500);
-            expect(res.body.message).toBe('Email sudah digunakan');
+            expect(PendingRegistration.create).toHaveBeenCalledTimes(1);
+            expect(User.create).not.toHaveBeenCalled();
         });
     });
 
@@ -90,7 +100,7 @@ describe('Auth Controller Tests', () => {
             jwt.sign.mockReturnValue('fake-jwt-token');
 
             const res = await request(app).post('/api/auth/login').send({
-                email: 'test@mail.com', password: 'Password123!'
+                email: 'test@mail.com', password: 'Password123!',
             });
 
             expect(res.status).toBe(200);
@@ -102,14 +112,14 @@ describe('Auth Controller Tests', () => {
             User.findOne.mockResolvedValue(null);
 
             const res = await request(app).post('/api/auth/login').send({
-                email: 'salah@mail.com', password: 'Password123!'
+                email: 'salah@mail.com', password: 'Password123!',
             });
 
             expect(res.status).toBe(401);
             expect(res.body.message).toBe('Email atau password salah.');
         });
 
-        it('5. [Error Scenario] harus mengembalikan 400 jika password salah', async () => {
+        it('5. [Error Scenario] harus menolak password yang salah', async () => {
             User.findOne.mockResolvedValue({
                 id: 1,
                 username: 'Fikrank',
@@ -121,18 +131,18 @@ describe('Auth Controller Tests', () => {
             bcrypt.compare.mockResolvedValue(false);
 
             const res = await request(app).post('/api/auth/login').send({
-                email: 'test@mail.com', password: 'wrongpassword'
+                email: 'test@mail.com', password: 'wrongpassword',
             });
 
             expect(res.status).toBe(401);
             expect(res.body.message).toBe('Email atau password salah.');
         });
 
-        it('6. [Error Scenario] harus mengembalikan 500 jika terjadi kesalahan server saat login', async () => {
+        it('6. [Error Scenario] harus mengembalikan 500 saat database gagal', async () => {
             User.findOne.mockRejectedValue(new Error('Database Down'));
 
             const res = await request(app).post('/api/auth/login').send({
-                email: 'test@mail.com', password: 'Password123!'
+                email: 'test@mail.com', password: 'Password123!',
             });
 
             expect(res.status).toBe(500);

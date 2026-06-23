@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const PendingRegistration = require('../models/PendingRegistration');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -102,53 +103,69 @@ exports.register = async (req, res) => {
         const password = String(req.body.password || '');
 
         if (!username || !email || !password) {
-            return res.status(400).json({ message: "Username, email, dan password wajib diisi." });
-        }
-
-        if (!isValidEmail(email)) {
-            return res.status(400).json({ message: "Format email tidak valid." });
-        }
-
-        if (!isStrongPassword(password)) {
-            return res.status(400).json({ message: passwordRuleMessage });
-        }
-
-        const usernameExists = await User.findOne({ where: { username } });
-        if (usernameExists) {
-            return res.status(409).json({ message: "Username sudah digunakan." });
-        }
-
-        const emailExists = await User.findOne({ where: { email } });
-        if (emailExists) {
-            return res.status(409).json({
-                message: emailExists.emailVerified === false
-                    ? "Email sudah terdaftar tetapi belum diverifikasi. Kirim ulang kode verifikasi."
-                    : "Email sudah terdaftar.",
-                code: emailExists.emailVerified === false ? 'EMAIL_NOT_VERIFIED' : 'EMAIL_EXISTS',
-                requiresVerification: emailExists.emailVerified === false,
-                email: emailExists.emailVerified === false ? email : undefined,
+            return res.status(400).json({
+                message: 'Username, email, dan password wajib diisi.',
             });
         }
 
-        const salt = await bcrypt.genSalt(BCRYPT_ROUNDS);
-        const hashedPassword = await bcrypt.hash(password, salt);
-        const verificationCode = createVerificationCode();
+        if (!isValidEmail(email)) {
+            return res.status(400).json({
+                message: 'Format email tidak valid.',
+            });
+        }
 
-        // 🌟 BUAT USER BARU DAN PAKSA ROLE-NYA MENJADI 'user'
-        const newUser = await User.create({
-            username,
-            name: username,
-            email,
-            password: hashedPassword,
-            profileImage: null,
-            emailVerified: false,
-            emailVerificationTokenHash: hashOneTimeToken(verificationCode),
-            emailVerificationExpiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
-            tokenVersion: 0,
-            role: 'user',
+        if (!isStrongPassword(password)) {
+            return res.status(400).json({
+                message: passwordRuleMessage,
+            });
+        }
+
+        const existingUser = await User.findOne({
+            where: { [Op.or]: [{ username }, { email }] },
+        });
+        if (existingUser?.username === username) {
+            return res.status(409).json({
+                message: 'Username sudah digunakan.',
+            });
+        }
+        if (existingUser) {
+            return res.status(409).json({
+                message: 'Email sudah terdaftar.',
+                code: 'EMAIL_EXISTS',
+            });
+        }
+
+        await PendingRegistration.destroy({
+            where: { verificationExpiresAt: { [Op.lte]: new Date() } },
         });
 
-        let delivery = { delivered: false, development: false };
+        const existingPending = await PendingRegistration.findOne({
+            where: { [Op.or]: [{ username }, { email }] },
+        });
+        if (existingPending) {
+            return res.status(409).json({
+                message: existingPending.email === email
+                    ? 'Registrasi sedang menunggu verifikasi. Gunakan kirim ulang kode.'
+                    : 'Username sedang digunakan pada registrasi yang menunggu verifikasi.',
+                code: 'REGISTRATION_PENDING',
+                requiresVerification: existingPending.email === email,
+                email: existingPending.email === email ? email : undefined,
+            });
+        }
+
+        const verificationCode = createVerificationCode();
+        const salt = await bcrypt.genSalt(BCRYPT_ROUNDS);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const pending = await PendingRegistration.create({
+            username,
+            email,
+            passwordHash: hashedPassword,
+            verificationTokenHash: hashOneTimeToken(verificationCode),
+            verificationExpiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
+            lastVerificationSentAt: new Date(),
+        });
+
+        let delivery;
         try {
             delivery = await sendVerificationEmail({
                 to: email,
@@ -156,27 +173,48 @@ exports.register = async (req, res) => {
                 code: verificationCode,
             });
         } catch (mailError) {
-            console.error('Gagal mengirim email verifikasi:', mailError.message);
+            await pending.destroy().catch(() => {});
+            console.error(
+                'Gagal mengirim email verifikasi:',
+                mailError.message
+            );
+
+            return res.status(503).json({
+                message:
+                    'Pendaftaran gagal karena email verifikasi tidak dapat dikirim. Silakan coba lagi.',
+                emailSent: false,
+            });
         }
 
-        res.status(201).json({
-            message: delivery.delivered
-                ? "Akun berhasil dibuat. Periksa email untuk kode verifikasi."
-                : "Akun berhasil dibuat. Kode verifikasi belum terkirim; gunakan tombol kirim ulang.",
-            data: serializeUser(newUser),
+        if (!delivery?.delivered) {
+            await pending.destroy().catch(() => {});
+            return res.status(503).json({
+                message:
+                    'Pendaftaran gagal karena email verifikasi belum terkirim. Silakan coba lagi.',
+                emailSent: false,
+            });
+        }
+
+        return res.status(201).json({
+            message:
+                'Kode verifikasi telah dikirim. Selesaikan verifikasi untuk membuat akun.',
+            data: { username, email },
             requiresVerification: true,
             email,
-            emailSent: delivery.delivered,
-            devVerificationCode: delivery.development
-                ? getDevelopmentValue(verificationCode)
-                : undefined,
+            emailSent: true,
         });
     } catch (err) {
         if (err.name === 'SequelizeUniqueConstraintError') {
-            return res.status(409).json({ message: "Username atau email sudah digunakan." });
+            return res.status(409).json({
+                message: 'Username atau email sudah digunakan.',
+            });
         }
 
-        res.status(500).json({ message: getSafeErrorMessage(err) });
+        console.error('Gagal melakukan registrasi:', err.message);
+
+        return res.status(500).json({
+            message: getSafeErrorMessage(err),
+        });
     }
 };
 
@@ -277,6 +315,63 @@ exports.verifyEmail = async (req, res) => {
     try {
         const email = cleanEmail(req.body.email);
         const code = cleanText(req.body.code, 6);
+        const pending = await PendingRegistration.findOne({ where: { email } });
+
+        if (pending) {
+            const expiresAt = new Date(pending.verificationExpiresAt || 0).getTime();
+            if (!/^\d{6}$/.test(code)
+                || expiresAt <= Date.now()
+                || !hasMatchingTokenHash(code, pending.verificationTokenHash)) {
+                return res.status(400).json({
+                    message: 'Kode verifikasi tidak valid atau sudah kedaluwarsa.',
+                });
+            }
+
+            const transaction = await PendingRegistration.sequelize.transaction();
+            try {
+                const conflict = await User.findOne({
+                    where: {
+                        [Op.or]: [
+                            { username: pending.username },
+                            { email: pending.email },
+                        ],
+                    },
+                    transaction,
+                });
+                if (conflict) {
+                    await transaction.rollback();
+                    return res.status(409).json({
+                        message: 'Username atau email sudah digunakan.',
+                    });
+                }
+
+                const newUser = await User.create({
+                    username: pending.username,
+                    name: pending.username,
+                    email: pending.email,
+                    password: pending.passwordHash,
+                    profileImage: null,
+                    emailVerified: true,
+                    emailVerificationTokenHash: null,
+                    emailVerificationExpiresAt: null,
+                    tokenVersion: 0,
+                    role: 'user',
+                }, { transaction });
+
+                await pending.destroy({ transaction });
+                await transaction.commit();
+
+                return res.json({
+                    message: 'Email berhasil diverifikasi. Akun kamu siap digunakan.',
+                    user: serializeUser(newUser),
+                });
+            } catch (error) {
+                await transaction.rollback();
+                throw error;
+            }
+        }
+
+        // Jalur kompatibilitas untuk akun lama dan perubahan email profil.
         const user = await User.findOne({ where: { email, role: 'user' } });
 
         if (!user || !/^\d{6}$/.test(code)) {
@@ -306,8 +401,49 @@ exports.verifyEmail = async (req, res) => {
 exports.resendVerification = async (req, res) => {
     try {
         const email = cleanEmail(req.body.email);
-        const user = await User.findOne({ where: { email, role: 'user' } });
         const genericMessage = 'Jika akun belum terverifikasi, kode baru akan dikirim ke email tersebut.';
+        const pending = await PendingRegistration.findOne({ where: { email } });
+
+        if (pending) {
+            const lastSentAt = new Date(pending.lastVerificationSentAt || 0).getTime();
+            if (lastSentAt > 0 && Date.now() - lastSentAt < VERIFICATION_RESEND_COOLDOWN_MS) {
+                return res.status(429).json({
+                    message: 'Tunggu sebentar sebelum meminta kode baru.',
+                });
+            }
+
+            const verificationCode = createVerificationCode();
+            let delivery = { delivered: false, development: false };
+            try {
+                delivery = await sendVerificationEmail({
+                    to: pending.email,
+                    name: pending.username,
+                    code: verificationCode,
+                });
+            } catch (mailError) {
+                console.error('Gagal mengirim ulang email verifikasi:', mailError.message);
+            }
+
+            if (!delivery.delivered) {
+                return res.status(503).json({
+                    message: 'Email verifikasi belum dapat dikirim. Coba lagi beberapa saat.',
+                    emailSent: false,
+                });
+            }
+
+            pending.verificationTokenHash = hashOneTimeToken(verificationCode);
+            pending.verificationExpiresAt = new Date(Date.now() + VERIFICATION_TTL_MS);
+            pending.lastVerificationSentAt = new Date();
+            await pending.save();
+
+            return res.json({
+                message: genericMessage,
+                emailSent: true,
+            });
+        }
+
+        // Jalur kompatibilitas untuk akun lama dan perubahan email profil.
+        const user = await User.findOne({ where: { email, role: 'user' } });
 
         if (!user || user.emailVerified !== false) {
             return res.json({ message: genericMessage });

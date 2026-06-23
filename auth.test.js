@@ -8,6 +8,12 @@ jest.mock('./models/User', () => ({
     create: jest.fn(),
     count: jest.fn(),
 }));
+jest.mock('./models/PendingRegistration', () => ({
+    destroy: jest.fn(),
+    findOne: jest.fn(),
+    create: jest.fn(),
+    sequelize: { transaction: jest.fn() },
+}));
 jest.mock('./models', () => ({
     User: require('./models/User'),
 }));
@@ -25,6 +31,7 @@ jest.mock('./utils/mailer', () => ({
 }));
 
 const User = require('./models/User');
+const PendingRegistration = require('./models/PendingRegistration');
 const bcrypt = require('bcryptjs');
 const { sendPasswordResetEmail, sendVerificationEmail } = require('./utils/mailer');
 const AuthController = require('./controllers/AuthController');
@@ -49,17 +56,25 @@ app.get('/api/auth/stats', AuthController.getStats);
 
 describe('Unit Test: Fitur Registrasi (Register)', () => {
     beforeEach(() => {
-        jest.clearAllMocks();
+        jest.resetAllMocks();
         process.env.JWT_SECRET = 'unit-test-secret-key';
+        User.findOne.mockResolvedValue(null);
+        bcrypt.genSalt.mockResolvedValue('salt');
+        bcrypt.hash.mockResolvedValue('hashed_password_rahasia');
+        sendVerificationEmail.mockResolvedValue({ delivered: true, development: false });
+        sendPasswordResetEmail.mockResolvedValue({ delivered: true, development: false });
+        PendingRegistration.destroy.mockResolvedValue(0);
+        PendingRegistration.findOne.mockResolvedValue(null);
+        PendingRegistration.create.mockResolvedValue({
+            destroy: jest.fn().mockResolvedValue(undefined),
+        });
+        PendingRegistration.sequelize.transaction.mockResolvedValue({
+            commit: jest.fn().mockResolvedValue(undefined),
+            rollback: jest.fn().mockResolvedValue(undefined),
+        });
     });
 
     it('Harus berhasil mendaftar dan mengembalikan status 201', async () => {
-        User.create.mockResolvedValue({
-            id: 1,
-            username: 'Fikrank Tester',
-            email: 'fikrank@test.com'
-        });
-
         const res = await request(app)
             .post('/api/auth/register')
             .send({
@@ -69,16 +84,18 @@ describe('Unit Test: Fitur Registrasi (Register)', () => {
             });
 
         expect(res.statusCode).toBe(201);
+        expect(res.body.message).toContain('Kode verifikasi telah dikirim');
         expect(bcrypt.genSalt).toHaveBeenCalledWith(12);
         expect(bcrypt.hash).toHaveBeenCalledWith('Password123!', 'salt');
-        expect(User.create).toHaveBeenCalledTimes(1);
+        expect(PendingRegistration.create).toHaveBeenCalledTimes(1);
+        expect(User.create).not.toHaveBeenCalled();
         expect(sendVerificationEmail).toHaveBeenCalledWith(expect.objectContaining({
             to: 'fikrank@test.com',
         }));
     });
 
-    it('Harus mengembalikan status 500 jika User.create gagal', async () => {
-        User.create.mockRejectedValue(new Error('DB Error'));
+    it('Harus mengembalikan status 500 jika penyimpanan registrasi pending gagal', async () => {
+        PendingRegistration.create.mockRejectedValue(new Error('DB Error'));
         const res = await request(app)
             .post('/api/auth/register')
             .send({
@@ -88,7 +105,8 @@ describe('Unit Test: Fitur Registrasi (Register)', () => {
             });
 
         expect(res.statusCode).toBe(500);
-        expect(User.create).toHaveBeenCalledTimes(1);
+        expect(PendingRegistration.create).toHaveBeenCalledTimes(1);
+        expect(User.create).not.toHaveBeenCalled();
     });
 
     it('Harus menolak password tanpa kombinasi huruf besar, kecil, angka, dan karakter unik', async () => {
@@ -303,6 +321,43 @@ describe('Unit Test: Fitur Registrasi (Register)', () => {
         expect(user.save).toHaveBeenCalledTimes(1);
     });
 
+    it('Baru membuat User setelah kode registrasi pending valid', async () => {
+        const transaction = {
+            commit: jest.fn().mockResolvedValue(undefined),
+            rollback: jest.fn().mockResolvedValue(undefined),
+        };
+        const pending = {
+            username: 'Pending Tester',
+            email: 'pending@test.com',
+            passwordHash: 'hashed_password_rahasia',
+            verificationTokenHash: crypto.createHash('sha256').update('123456').digest('hex'),
+            verificationExpiresAt: new Date(Date.now() + 60_000),
+            destroy: jest.fn().mockResolvedValue(undefined),
+        };
+        const createdUser = {
+            id: 10,
+            username: pending.username,
+            email: pending.email,
+            emailVerified: true,
+        };
+        PendingRegistration.findOne.mockResolvedValue(pending);
+        PendingRegistration.sequelize.transaction.mockResolvedValue(transaction);
+        User.findOne.mockResolvedValue(null);
+        User.create.mockResolvedValue(createdUser);
+
+        const res = await request(app)
+            .post('/api/auth/verify-email')
+            .send({ email: pending.email, code: '123456' });
+
+        expect(res.statusCode).toBe(200);
+        expect(User.create).toHaveBeenCalledWith(
+            expect.objectContaining({ email: pending.email, emailVerified: true }),
+            { transaction },
+        );
+        expect(pending.destroy).toHaveBeenCalledWith({ transaction });
+        expect(transaction.commit).toHaveBeenCalledTimes(1);
+    });
+
     it('Harus menolak kode verifikasi yang kedaluwarsa', async () => {
         User.findOne.mockResolvedValue({
             emailVerified: false,
@@ -391,9 +446,7 @@ describe('Unit Test: Fitur Registrasi (Register)', () => {
     });
 
     it('Harus menolak registrasi jika email sudah terdaftar', async () => {
-        User.findOne
-            .mockResolvedValueOnce(null)
-            .mockResolvedValueOnce({ id: 4, email: 'fikrank@test.com' });
+        User.findOne.mockResolvedValue({ id: 4, email: 'fikrank@test.com' });
 
         const res = await request(app)
             .post('/api/auth/register')

@@ -4,6 +4,7 @@ const Umkm = require('./Umkm');
 const Review = require('./Review');
 const SavedUmkm = require('./SavedUmkm');
 const Notification = require('./Notification');
+const PendingRegistration = require('./PendingRegistration');
 
 User.hasMany(Umkm, { foreignKey: 'userId', as: 'umkms' });
 Umkm.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
@@ -25,5 +26,6 @@ module.exports = {
     Umkm,
     Review,
     SavedUmkm,
-    Notification
+    Notification,
+    PendingRegistration,
 };
