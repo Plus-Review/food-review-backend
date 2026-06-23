@@ -65,15 +65,40 @@ const credentialRecoveryLimiter = rateLimit({
     message: { message: 'Permintaan keamanan akun terlalu sering. Coba lagi dalam 15 menit.' },
 });
 
+const frontendVercelPattern =
+    /^https:\/\/food-review-frontend(?:-[a-z0-9-]+)?\.vercel\.app$/;
+
+const isPlusReviewFrontend = (origin) => {
+    if (!origin) return true;
+    if (allowedOrigins.includes(origin)) return true;
+
+    try {
+        const { protocol, hostname } = new URL(origin);
+
+        return protocol === 'https:'
+            && (
+                hostname === 'food-review-frontend.vercel.app'
+                || (
+                    hostname.startsWith('food-review-frontend-')
+                    && hostname.endsWith('.vercel.app')
+                )
+            );
+    } catch {
+        return false;
+    }
+};
+
 app.use(cors({
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin) || (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production')) {
+        if (isPlusReviewFrontend(origin)) {
             callback(null, true);
             return;
         }
 
         callback(new Error('Origin tidak diizinkan oleh konfigurasi CORS.'));
     },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
