@@ -29,8 +29,13 @@ if (process.env.NODE_ENV === 'production' && !isMailerConfigured()) {
     throw new Error('Konfigurasi SMTP wajib diisi agar verifikasi email dan reset password dapat digunakan.');
 }
 
-if (process.env.VERCEL && !process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error('BLOB_READ_WRITE_TOKEN wajib diisi agar upload gambar tersimpan permanen di Vercel.');
+const hasBlobConfiguration = Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN
+    || process.env.BLOB_STORE_ID
+);
+
+if (process.env.VERCEL && !hasBlobConfiguration) {
+    throw new Error('Vercel Blob wajib dihubungkan agar upload gambar tersimpan permanen.');
 }
 
 const apiLimiter = rateLimit({
