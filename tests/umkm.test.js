@@ -8,7 +8,11 @@ app.use(express.json());
 
 // 1. Mocking Middleware Auth
 jest.mock('../middleware/authMiddleware', () => (req, res, next) => {
-    req.user = { id: 1 };
+    req.user = {
+        id: 1,
+        username: 'tester',
+        role: req.header('x-test-role') || 'user',
+    };
     next();
 });
 
@@ -71,7 +75,7 @@ const { Umkm, Review, User, SavedUmkm } = require('../models');
 app.use('/api/umkm', umkmRoutes);
 
 // ==========================================
-//        MULAI 20 REGRESSION TEST SUITE
+//        MULAI 22 REGRESSION TEST SUITE
 // ==========================================
 
 describe('UMKM API Regression Tests', () => {
@@ -224,44 +228,77 @@ describe('UMKM API Regression Tests', () => {
 
     // ─── ENDPOINT: PUT /api/umkm/:id ───
     describe('PUT /api/umkm/:id', () => {
-        it('17. [Happy Path] harus berhasil memperbarui data UMKM yang sudah ada', async () => {
+        it('17. [Authorization] harus menolak user biasa yang mengedit UMKM', async () => {
+            const res = await request(app)
+                .put('/api/umkm/1')
+                .send({ nama_umkm: 'Perubahan User' });
+
+            expect(res.status).toBe(403);
+            expect(Umkm.findByPk).not.toHaveBeenCalled();
+        });
+
+        it('18. [Happy Path] admin harus berhasil memperbarui UMKM secara langsung', async () => {
+            const update = jest.fn().mockResolvedValue(true);
             Umkm.findByPk.mockResolvedValue({
                 id: 1,
                 userId: 1,
                 verification_status: 'pending_create',
                 images: [],
-                update: jest.fn().mockResolvedValue(true),
+                update,
             });
-            const res = await request(app).put('/api/umkm/1').send({
-                nama_umkm: 'Warung Update',
-                jenis_makanan: 'Makanan berat',
-            });
+            const res = await request(app)
+                .put('/api/umkm/1')
+                .set('x-test-role', 'admin')
+                .send({
+                    nama_umkm: 'Warung Update',
+                    jenis_makanan: 'Makanan berat',
+                });
+
             expect(res.status).toBe(200);
+            expect(update).toHaveBeenCalledWith(expect.objectContaining({
+                nama_umkm: 'Warung Update',
+                verification_status: 'approved',
+                pending_update: null,
+            }));
         });
 
-        it('18. [Error Scenario] harus mengembalikan 404 jika UMKM yang mau diupdate tidak ada', async () => {
+        it('19. [Error Scenario] harus mengembalikan 404 jika UMKM yang mau diupdate tidak ada', async () => {
             Umkm.findByPk.mockResolvedValue(null);
-            const res = await request(app).put('/api/umkm/999').send({ nama_umkm: 'Warung Update' });
+            const res = await request(app)
+                .put('/api/umkm/999')
+                .set('x-test-role', 'admin')
+                .send({ nama_umkm: 'Warung Update' });
             expect(res.status).toBe(404);
         });
     });
 
     // ─── ENDPOINT: DELETE /api/umkm/:id ───
     describe('DELETE /api/umkm/:id', () => {
-        it('19. [Happy Path] harus berhasil menghapus data UMKM', async () => {
+        it('20. [Authorization] harus menolak user biasa yang menghapus UMKM', async () => {
+            const res = await request(app).delete('/api/umkm/1');
+
+            expect(res.status).toBe(403);
+            expect(Umkm.findByPk).not.toHaveBeenCalled();
+        });
+
+        it('21. [Happy Path] admin harus berhasil menghapus data UMKM', async () => {
             const destroy = jest.fn().mockResolvedValue(true);
             Umkm.findByPk.mockResolvedValue({ id: 1, userId: 1, images: [], destroy });
             Review.findAll.mockResolvedValue([]);
             Review.destroy.mockResolvedValue(0);
             SavedUmkm.destroy.mockResolvedValue(0);
-            const res = await request(app).delete('/api/umkm/1');
+            const res = await request(app)
+                .delete('/api/umkm/1')
+                .set('x-test-role', 'admin');
             expect(res.status).toBe(200);
             expect(destroy).toHaveBeenCalledTimes(1);
         });
 
-        it('20. [Error Scenario] harus mengembalikan 404 jika UMKM yang mau dihapus tidak ditemukan', async () => {
+        it('22. [Error Scenario] harus mengembalikan 404 jika UMKM yang mau dihapus tidak ditemukan', async () => {
             Umkm.findByPk.mockResolvedValue(null);
-            const res = await request(app).delete('/api/umkm/999');
+            const res = await request(app)
+                .delete('/api/umkm/999')
+                .set('x-test-role', 'admin');
             expect(res.status).toBe(404);
         });
     });

@@ -367,7 +367,6 @@ exports.updateUmkm = (req, res) => {
         try {
             await persistRequestFiles(req.files, 'umkm');
             const id = parsePositiveInt(req.params.id);
-            const userId = getAuthUserId(req);
 
             if (!id) {
                 deleteRequestFiles(req.files);
@@ -381,11 +380,6 @@ exports.updateUmkm = (req, res) => {
             if (!umkm) {
                 deleteRequestFiles(req.files);
                 return res.status(404).json({ message: 'UMKM tidak ditemukan.' });
-            }
-
-            if (!userId || Number(umkm.userId) !== Number(userId)) {
-                deleteRequestFiles(req.files);
-                return res.status(403).json({ message: 'Kamu hanya bisa mengedit UMKM yang kamu tambahkan.' });
             }
 
             const { data: nextFields, error: validationError } = getValidatedUmkmPayload(req.body);
@@ -409,100 +403,24 @@ exports.updateUmkm = (req, res) => {
                 return res.status(400).json({ message: 'Foto detail maksimal 7 gambar.' });
             }
 
-            const currentStatus = umkm.verification_status || 'approved';
-            if (currentStatus === 'pending_create' || currentStatus === 'rejected') {
-                await umkm.update({
-                    ...nextFields,
-                    image: primaryImage ? primaryImage.filename : umkm.image,
-                    images: nextImages,
-                    verification_status: 'pending_create',
-                    verification_note: null,
-                    pending_update: null,
-                    submitted_at: new Date(),
-                    reviewed_at: null,
-                    reviewed_by: null,
-                });
-
-                if (primaryImage && oldImage) deleteUploadedImage(oldImage);
-                deleteUploadedImages(removedImages);
-                deletePendingUpdateFiles(previousPendingUpdate);
-
-                await Promise.all([
-                    createAdminNotification({
-                        type: 'umkm_pending_create',
-                        title: 'UMKM dikirim ulang',
-                        message: `${umkm.nama_umkm} diperbarui oleh owner dan kembali menunggu verifikasi admin.`,
-                        relatedUmkmId: umkm.id,
-                        metadata: {
-                            status: 'pending_create',
-                            umkmName: umkm.nama_umkm,
-                            category: umkm.jenis_makanan,
-                        },
-                    }),
-                    createUserNotification(userId, {
-                        type: 'umkm_resubmitted',
-                        title: 'Perbaikan UMKM dikirim',
-                        message: `${umkm.nama_umkm} sudah dikirim ulang. Admin akan mengecek perbaikan terbaru sebelum UMKM tampil di feed.`,
-                        relatedUmkmId: umkm.id,
-                        metadata: {
-                            status: 'pending_create',
-                            umkmName: umkm.nama_umkm,
-                        },
-                    }),
-                ]);
-
-                return res.json({
-                    message: 'UMKM berhasil diperbarui dan kembali menunggu verifikasi admin.',
-                    umkm,
-                });
-            }
-
-            deletePendingUpdateFiles(previousPendingUpdate);
-
             await umkm.update({
-                verification_status: 'pending_update',
+                ...nextFields,
+                image: primaryImage ? primaryImage.filename : umkm.image,
+                images: nextImages,
+                verification_status: 'approved',
                 verification_note: null,
-                pending_update: {
-                    fields: nextFields,
-                    primaryImage: primaryImage ? primaryImage.filename : null,
-                    oldImage,
-                    retainedImages,
-                    newDetailImages,
-                    removedImages,
-                    nextImages,
-                    requestedAt: new Date().toISOString(),
-                },
+                pending_update: null,
                 submitted_at: new Date(),
-                reviewed_at: null,
-                reviewed_by: null,
+                reviewed_at: new Date(),
+                reviewed_by: String(req.user?.username || req.user?.id || 'admin'),
             });
 
-            await Promise.all([
-                createAdminNotification({
-                    type: 'umkm_pending_update',
-                    title: 'Edit UMKM menunggu verifikasi',
-                    message: `${umkm.nama_umkm} mengirim perubahan data. Data lama tetap tampil sampai admin menyetujui perubahan.`,
-                    relatedUmkmId: umkm.id,
-                    metadata: {
-                        status: 'pending_update',
-                        umkmName: umkm.nama_umkm,
-                        category: umkm.jenis_makanan,
-                    },
-                }),
-                createUserNotification(userId, {
-                    type: 'umkm_update_submitted',
-                    title: 'Perubahan UMKM dikirim',
-                    message: `Perubahan untuk ${umkm.nama_umkm} sudah masuk antrean admin. Data lama tetap tampil sampai perubahan disetujui.`,
-                    relatedUmkmId: umkm.id,
-                    metadata: {
-                        status: 'pending_update',
-                        umkmName: umkm.nama_umkm,
-                    },
-                }),
-            ]);
+            if (primaryImage && oldImage) deleteUploadedImage(oldImage);
+            deleteUploadedImages(removedImages);
+            deletePendingUpdateFiles(previousPendingUpdate);
 
-            res.json({
-                message: 'Perubahan UMKM dikirim ke admin. Data lama tetap tampil sampai perubahan disetujui.',
+            return res.json({
+                message: 'UMKM berhasil diperbarui oleh admin.',
                 umkm,
             });
         } catch (error) {
@@ -515,7 +433,6 @@ exports.updateUmkm = (req, res) => {
 exports.deleteUmkm = async (req, res) => {
     try {
         const id = parsePositiveInt(req.params.id);
-        const userId = getAuthUserId(req);
 
         if (!id) {
             return res.status(400).json({ message: 'ID UMKM tidak valid.' });
@@ -525,10 +442,6 @@ exports.deleteUmkm = async (req, res) => {
 
         if (!umkm) {
             return res.status(404).json({ message: 'UMKM tidak ditemukan.' });
-        }
-
-        if (!userId || Number(umkm.userId) !== Number(userId)) {
-            return res.status(403).json({ message: 'Kamu hanya bisa menghapus UMKM yang kamu tambahkan.' });
         }
 
         const reviewRows = await Review.findAll({
