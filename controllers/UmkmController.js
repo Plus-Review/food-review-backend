@@ -468,6 +468,60 @@ exports.deleteUmkm = async (req, res) => {
     }
 };
 
+exports.deleteRejectedUmkm = async (req, res) => {
+    try {
+        const id = parsePositiveInt(req.params.id);
+        const userId = getAuthUserId(req);
+
+        if (!userId) {
+            return res.status(401).json({ message: 'Silakan login untuk menghapus UMKM milikmu.' });
+        }
+
+        if (!id) {
+            return res.status(400).json({ message: 'ID UMKM tidak valid.' });
+        }
+
+        const umkm = await Umkm.findByPk(id);
+
+        if (!umkm) {
+            return res.status(404).json({ message: 'UMKM tidak ditemukan.' });
+        }
+
+        if (Number(umkm.userId) !== Number(userId)) {
+            return res.status(403).json({ message: 'Kamu hanya dapat menghapus UMKM milikmu sendiri.' });
+        }
+
+        if (String(umkm.verification_status || '').toLowerCase() !== 'rejected') {
+            return res.status(403).json({
+                message: 'User hanya dapat menghapus UMKM yang telah ditolak admin.',
+            });
+        }
+
+        const reviewRows = await Review.findAll({
+            where: { umkmId: id },
+            attributes: ['images'],
+        });
+        const reviewImages = reviewRows.flatMap((review) => normalizeImages(review.images));
+        const primaryImage = umkm.image;
+        const detailImages = normalizeImages(umkm.images);
+        const pendingUpdate = umkm.pending_update;
+
+        await SavedUmkm.destroy({ where: { umkmId: id } });
+        await Review.destroy({ where: { umkmId: id } });
+        await umkm.destroy();
+
+        deleteUploadedImage(primaryImage);
+        deleteUploadedImages(detailImages);
+        deleteUploadedImages(reviewImages);
+        deletePendingUpdateFiles(pendingUpdate);
+
+        return res.json({ message: 'UMKM yang ditolak berhasil dihapus.' });
+    } catch (error) {
+        console.error('Gagal menghapus UMKM yang ditolak:', error.message);
+        return res.status(500).json({ message: getSafeErrorMessage(error) });
+    }
+};
+
 exports.getSavedUmkm = async (req, res) => {
     try {
         const userId = getAuthUserId(req);
