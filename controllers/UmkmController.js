@@ -682,14 +682,20 @@ exports.addReview = (req, res) => {
                 return res.status(400).json({ message: 'ID UMKM tidak valid.' });
             }
 
-            if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+            if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
                 deleteRequestFiles(req.files);
-                return res.status(400).json({ message: 'Rating wajib dipilih dari 1 sampai 5.' });
+                return res.status(400).json({
+                    message: 'Rating harus 1-5',
+                    errors: [{ msg: 'Rating harus 1-5', path: 'rating', location: 'body' }],
+                });
             }
 
-            if (!cleanComment) {
+            if (!cleanComment || cleanComment.length < 5) {
                 deleteRequestFiles(req.files);
-                return res.status(400).json({ message: 'Komentar review wajib diisi.' });
+                return res.status(400).json({
+                    message: 'Komentar minimal 5 karakter',
+                    errors: [{ msg: 'Komentar minimal 5 karakter', path: 'komentar', location: 'body' }],
+                });
             }
 
             const umkm = await Umkm.findByPk(umkmId);
@@ -760,14 +766,20 @@ exports.updateReview = (req, res) => {
                 return res.status(400).json({ message: 'ID review tidak valid.' });
             }
 
-            if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+            if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
                 deleteRequestFiles(req.files);
-                return res.status(400).json({ message: 'Rating wajib dipilih dari 1 sampai 5.' });
+                return res.status(400).json({
+                    message: 'Rating harus 1-5',
+                    errors: [{ msg: 'Rating harus 1-5', path: 'rating', location: 'body' }],
+                });
             }
 
-            if (!cleanComment) {
+            if (!cleanComment || cleanComment.length < 5) {
                 deleteRequestFiles(req.files);
-                return res.status(400).json({ message: 'Komentar review wajib diisi.' });
+                return res.status(400).json({
+                    message: 'Komentar minimal 5 karakter',
+                    errors: [{ msg: 'Komentar minimal 5 karakter', path: 'komentar', location: 'body' }],
+                });
             }
 
             const review = await Review.findOne({
